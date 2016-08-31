@@ -1,44 +1,50 @@
-import StringIO
-import difflib
-import filecmp
+from __future__ import print_function
+
 import logging
 import os
 import pprint
-import re
 import shutil
-import subprocess
 import tarfile
 import tempfile
 import time
 import unittest
-import urllib
 import zipfile
-
-from base.asserts import verify_assertions
-from base.test_data import TestDataResolver
-from galaxy.util import asbool
-from galaxy.util.json import loads
-from galaxy.web import security
-from galaxy.web.framework.helpers import iff, escape
-from urlparse import urlparse
-
-from galaxy import eggs
-eggs.require( 'twill' )
-
+from json import loads
 from xml.etree import ElementTree
+
+# Be sure to use Galaxy's vanilla pyparsing instead of the older version
+# imported by twill.
+import pyparsing  # noqa: F401
 
 import twill
 import twill.commands as tc
+from markupsafe import escape
+from six import string_types, StringIO
+from six.moves.urllib.parse import unquote, urlencode, urlparse
 from twill.other_packages._mechanize_dist import ClientForm
 
-#Force twill to log to a buffer -- FIXME: Should this go to stdout and be captured by nose?
-buffer = StringIO.StringIO()
+from galaxy.web import security
+from galaxy.web.framework.helpers import iff
+
+from galaxy.tools.verify.test_data import TestDataResolver
+from galaxy.tools.verify import (
+    verify,
+    check_command,
+    files_diff,
+    make_temp_fname,
+)
+
+
+# Force twill to log to a buffer -- FIXME: Should this go to stdout and be captured by nose?
+buffer = StringIO()
 twill.set_output( buffer )
 tc.config( 'use_tidy', 0 )
 
 # Dial ClientCookie logging down (very noisy)
 logging.getLogger( "ClientCookie.cookies" ).setLevel( logging.WARNING )
 log = logging.getLogger( __name__ )
+
+DEFAULT_TOOL_TEST_WAIT = os.environ.get("GALAXY_TEST_DEFAULT_WAIT", 86400)
 
 
 class TwillTestCase( unittest.TestCase ):
@@ -49,8 +55,9 @@ class TwillTestCase( unittest.TestCase ):
         self.history_id = os.environ.get( 'GALAXY_TEST_HISTORY_ID', None )
         self.host = os.environ.get( 'GALAXY_TEST_HOST' )
         self.port = os.environ.get( 'GALAXY_TEST_PORT' )
-        self.url = "http://%s:%s" % ( self.host, self.port )
-        self.test_data_resolver = TestDataResolver( 'GALAXY_TEST_FILE_DIR' )
+        default_url = "http://%s:%s" % (self.host, self.port)
+        self.url = os.environ.get('GALAXY_TEST_EXTERNAL', default_url)
+        self.test_data_resolver = TestDataResolver( )
         self.tool_shed_test_file = os.environ.get( 'GALAXY_TOOL_SHED_TEST_FILE', None )
         if self.tool_shed_test_file:
             f = open( self.tool_shed_test_file, 'r' )
@@ -69,8 +76,8 @@ class TwillTestCase( unittest.TestCase ):
     def act_on_multiple_datasets( self, cntrller, library_id, do_action, ldda_ids='', strings_displayed=[] ):
         # Can't use the ~/library_admin/libraries form as twill barfs on it so we'll simulate the form submission
         # by going directly to the form action
-        self.visit_url( '%s/library_common/act_on_multiple_datasets?cntrller=%s&library_id=%s&ldda_ids=%s&do_action=%s' \
-                        % ( self.url, cntrller, library_id, ldda_ids, do_action ) )
+        self.visit_url( '%s/library_common/act_on_multiple_datasets?cntrller=%s&library_id=%s&ldda_ids=%s&do_action=%s' %
+                        ( self.url, cntrller, library_id, ldda_ids, do_action ) )
         for check_str in strings_displayed:
             self.check_page_for_string( check_str )
 
@@ -139,7 +146,7 @@ class TwillTestCase( unittest.TestCase ):
             self.check_page_for_string( check_str )
 
     def add_tag( self, item_id, item_class, context, new_tag ):
-        self.visit_url( "%s/tag/add_tag_async?item_id=%s&item_class=%s&context=%s&new_tag=%s" % \
+        self.visit_url( "%s/tag/add_tag_async?item_id=%s&item_class=%s&context=%s&new_tag=%s" %
                         ( self.url, item_id, item_class, context, new_tag ) )
 
     def add_template( self, cntrller, item_type, form_type, form_id, form_name,
@@ -156,7 +163,7 @@ class TwillTestCase( unittest.TestCase ):
         elif item_type == 'ldda':
             params[ 'ldda_id' ] = ldda_id
         self.visit_url( url, params )
-        self.check_page_for_string ( "Select a template for the" )
+        self.check_page_for_string( "Select a template for the" )
         self.refresh_form( "form_id", form_id )
         # For some unknown reason, twill barfs if the form number ( 1 ) is used in the following
         # rather than the form anme ( select_template ), so we have to use the form name.
@@ -308,6 +315,7 @@ class TwillTestCase( unittest.TestCase ):
                 parent_folder = parent_folder.parent
             path += ldda.name
             return path
+
         def mkdir( file ):
             dir = os.path.join( tmpd, os.path.dirname( file ) )
             if not os.path.exists( dir ):
@@ -333,7 +341,7 @@ class TwillTestCase( unittest.TestCase ):
             assert os.path.exists( downloaded_file )
             try:
                 self.files_diff( orig_file, downloaded_file )
-            except AssertionError, err:
+            except AssertionError as err:
                 errmsg = 'Library item %s different than expected, difference:\n' % ldda.name
                 errmsg += str( err )
                 errmsg += 'Unpacked archive remains in: %s\n' % tmpd
@@ -361,7 +369,7 @@ class TwillTestCase( unittest.TestCase ):
         (3) The contents of that key match the provided value.
         If use_string_contains=True, this will perform a substring match, otherwise an exact match.
         """
-        #TODO: multi key, value
+        # TODO: multi key, value
         hda = dict()
         for history_item in self.get_history_from_api():
             if history_item[ 'id' ] == hda_id:
@@ -419,8 +427,8 @@ class TwillTestCase( unittest.TestCase ):
         try:
             json_data = self.get_history_from_api( show_deleted=show_deleted, show_details=True )
             check_result = check_fn( json_data )
-            assert check_result, 'failed check_fn: %s (got %s)' % ( check_fn.func_name, str( check_result ) )
-        except Exception, e:
+            assert check_result, 'failed check_fn: %s (got %s)' % ( check_fn.__name__, str( check_result ) )
+        except Exception as e:
             log.exception( e )
             log.debug( 'json_data: %s', ( '\n' + pprint.pformat( json_data ) if json_data else '(no match)' ) )
             fname = self.write_temp_file( tc.browser.get_html() )
@@ -453,12 +461,12 @@ class TwillTestCase( unittest.TestCase ):
         page = self.last_page()
         if page.find( patt ) == -1:
             fname = self.write_temp_file( page )
-            errmsg = "no match to '%s'\npage content written to '%s'" % ( patt, fname )
+            errmsg = "no match to '%s'\npage content written to '%s'\npage: [[%s]]" % ( patt, fname, page )
             raise AssertionError( errmsg )
 
     def check_request_grid( self, cntrller, state, deleted=False, strings_displayed=[] ):
         params = { 'f-state': state, 'f-deleted': deleted, 'sort': 'create_time' }
-        self.visit_url( '/%s/browse_requests' % cntrller )
+        self.visit_url( '/%s/browse_requests' % cntrller, params )
         for check_str in strings_displayed:
             self.check_page_for_string( check_str )
 
@@ -603,7 +611,7 @@ class TwillTestCase( unittest.TestCase ):
         url = "/admin/groups"
         params = dict( operation='create', create_group_button='Save', name=name )
         if in_user_ids:
-            params [ 'in_users' ] = ','.join( in_user_ids )
+            params[ 'in_users' ] = ','.join( in_user_ids )
         if in_role_ids:
             params[ 'in_roles' ] = ','.join( in_role_ids )
         if create_role_for_group:
@@ -743,7 +751,6 @@ class TwillTestCase( unittest.TestCase ):
         tc.fv( "1", "name", name )
         tc.fv( "1", "desc", desc )
         for index, field_value_tuple in enumerate( field_value_tuples ):
-            field_index = index + 1
             field_name, field_value, refresh_on_change = field_value_tuple
             if refresh_on_change:
                 # Only the AddressField type has a refresh on change setup on selecting an option
@@ -754,7 +761,7 @@ class TwillTestCase( unittest.TestCase ):
                     # handle new address
                     self.check_page_for_string( 'Short address description' )
                     for address_field, value in address_value.items():
-                        tc.fv( "1", field_name+'_'+address_field, value )
+                        tc.fv( "1", field_name + '_' + address_field, value )
                 else:
                     # existing address
                     tc.fv( "1", field_name, address_value )
@@ -783,7 +790,7 @@ class TwillTestCase( unittest.TestCase ):
             url_params[ 'create_group_for_role' ] = [ 'yes', 'yes' ]
             doseq = True
         else:
-            doseq=False
+            doseq = False
         self.visit_url( url, params=url_params, doseq=doseq )
         for check_str in strings_displayed:
             self.check_page_for_string( check_str )
@@ -869,11 +876,11 @@ class TwillTestCase( unittest.TestCase ):
         # page from an external URL.  By "barfs", I mean that twill somehow loses hod on the
         # cntrller param.  We'll just simulate the form submission by building the URL manually.
         # Here's the old, better approach...
-        #self.visit_url( "%s/library_common/browse_library?cntrller=%s&id=%s" % ( self.url, cntrller, library_id ) )
-        #for ldda_id in ldda_ids:
+        # self.visit_url( "%s/library_common/browse_library?cntrller=%s&id=%s" % ( self.url, cntrller, library_id ) )
+        # for ldda_id in ldda_ids:
         #    tc.fv( "1", "ldda_ids", ldda_id )
-        #tc.fv( "1", "do_action", format )
-        #tc.submit( "action_on_datasets_button" )
+        # tc.fv( "1", "do_action", format )
+        # tc.submit( "action_on_datasets_button" )
         # Here's the new approach...
         params = dict( cntrller=cntrller, library_id=library_id, do_action=format, ldda_ids=ldda_ids )
         url = "/library_common/act_on_multiple_datasets"
@@ -893,7 +900,6 @@ class TwillTestCase( unittest.TestCase ):
         if new_desc:
             tc.fv( "1", "desc", new_desc )
         for index, ( field_name, field_value ) in enumerate( new_fields ):
-            field_name_index = index + 1
             tc.fv( "1", field_name, field_value )
         tc.submit( "edit_basic_request_info_button" )
         for check_str in strings_displayed_after_submit:
@@ -1057,125 +1063,7 @@ class TwillTestCase( unittest.TestCase ):
 
     def files_diff( self, file1, file2, attributes=None ):
         """Checks the contents of 2 files for differences"""
-        def get_lines_diff( diff ):
-            count = 0
-            for line in diff:
-                if ( line.startswith( '+' ) and not line.startswith( '+++' ) ) or ( line.startswith( '-' ) and not line.startswith( '---' ) ):
-                    count += 1
-            return count
-        if not filecmp.cmp( file1, file2 ):
-            files_differ = False
-            local_file = open( file1, 'U' ).readlines()
-            history_data = open( file2, 'U' ).readlines()
-            if attributes is None:
-                attributes = {}
-            if attributes.get( 'sort', False ):
-                history_data.sort()
-            ##Why even bother with the check loop below, why not just use the diff output? This seems wasteful.
-            if len( local_file ) == len( history_data ):
-                for i in range( len( history_data ) ):
-                    if local_file[i].rstrip( '\r\n' ) != history_data[i].rstrip( '\r\n' ):
-                        files_differ = True
-                        break
-            else:
-                files_differ = True
-            if files_differ:
-                allowed_diff_count = int(attributes.get( 'lines_diff', 0 ))
-                diff = list( difflib.unified_diff( local_file, history_data, "local_file", "history_data" ) )
-                diff_lines = get_lines_diff( diff )
-                if diff_lines > allowed_diff_count:
-                    if 'GALAXY_TEST_RAW_DIFF' in os.environ:
-                        diff_slice = diff
-                    else:
-                        if len(diff) < 60:
-                            diff_slice = diff[0:40]
-                        else:
-                            diff_slice = diff[:25] + ["********\n", "*SNIP *\n", "********\n"] + diff[-25:]
-                    #FIXME: This pdf stuff is rather special cased and has not been updated to consider lines_diff
-                    #due to unknown desired behavior when used in conjunction with a non-zero lines_diff
-                    #PDF forgiveness can probably be handled better by not special casing by __extension__ here
-                    #and instead using lines_diff or a regular expression matching
-                    #or by creating and using a specialized pdf comparison function
-                    if file1.endswith( '.pdf' ) or file2.endswith( '.pdf' ):
-                        # PDF files contain creation dates, modification dates, ids and descriptions that change with each
-                        # new file, so we need to handle these differences.  As long as the rest of the PDF file does
-                        # not differ we're ok.
-                        valid_diff_strs = [ 'description', 'createdate', 'creationdate', 'moddate', 'id', 'producer', 'creator' ]
-                        valid_diff = False
-                        invalid_diff_lines = 0
-                        for line in diff_slice:
-                            # Make sure to lower case strings before checking.
-                            line = line.lower()
-                            # Diff lines will always start with a + or - character, but handle special cases: '--- local_file \n', '+++ history_data \n'
-                            if ( line.startswith( '+' ) or line.startswith( '-' ) ) and line.find( 'local_file' ) < 0 and line.find( 'history_data' ) < 0:
-                                for vdf in valid_diff_strs:
-                                    if line.find( vdf ) < 0:
-                                        valid_diff = False
-                                    else:
-                                        valid_diff = True
-                                        # Stop checking as soon as we know we have a valid difference
-                                        break
-                                if not valid_diff:
-                                    invalid_diff_lines += 1
-                        log.info('## files diff on %s and %s lines_diff=%d, found diff = %d, found pdf invalid diff = %d' % (file1, file2, allowed_diff_count, diff_lines, invalid_diff_lines))
-                        if invalid_diff_lines > allowed_diff_count:
-                            # Print out diff_slice so we can see what failed
-                            print "###### diff_slice ######"
-                            raise AssertionError( "".join( diff_slice ) )
-                    else:
-                        log.info('## files diff on %s and %s lines_diff=%d, found diff = %d' % (file1, file2, allowed_diff_count, diff_lines))
-                        for line in diff_slice:
-                            for char in line:
-                                if ord( char ) > 128:
-                                    raise AssertionError( "Binary data detected, not displaying diff" )
-                        raise AssertionError( "".join( diff_slice )  )
-
-    def files_re_match( self, file1, file2, attributes=None ):
-        """Checks the contents of 2 files for differences using re.match"""
-        local_file = open( file1, 'U' ).readlines()  # regex file
-        history_data = open( file2, 'U' ).readlines()
-        assert len( local_file ) == len( history_data ), 'Data File and Regular Expression File contain a different number of lines (%s != %s)\nHistory Data (first 40 lines):\n%s' % ( len( local_file ), len( history_data ), ''.join( history_data[:40] ) )
-        if attributes is None:
-            attributes = {}
-        if attributes.get( 'sort', False ):
-            history_data.sort()
-        lines_diff = int(attributes.get( 'lines_diff', 0 ))
-        line_diff_count = 0
-        diffs = []
-        for i in range( len( history_data ) ):
-            if not re.match( local_file[i].rstrip( '\r\n' ), history_data[i].rstrip( '\r\n' ) ):
-                line_diff_count += 1
-                diffs.append( 'Regular Expression: %s\nData file         : %s' % ( local_file[i].rstrip( '\r\n' ),  history_data[i].rstrip( '\r\n' ) ) )
-            if line_diff_count > lines_diff:
-                raise AssertionError( "Regular expression did not match data file (allowed variants=%i):\n%s" % ( lines_diff, "".join( diffs ) ) )
-
-    def files_re_match_multiline( self, file1, file2, attributes=None ):
-        """Checks the contents of 2 files for differences using re.match in multiline mode"""
-        local_file = open( file1, 'U' ).read()  # regex file
-        if attributes is None:
-            attributes = {}
-        if attributes.get( 'sort', False ):
-            history_data = open( file2, 'U' ).readlines()
-            history_data.sort()
-            history_data = ''.join( history_data )
-        else:
-            history_data = open( file2, 'U' ).read()
-        #lines_diff not applicable to multiline matching
-        assert re.match( local_file, history_data, re.MULTILINE ), "Multiline Regular expression did not match data file"
-
-    def files_contains( self, file1, file2, attributes=None ):
-        """Checks the contents of file2 for substrings found in file1, on a per-line basis"""
-        local_file = open( file1, 'U' ).readlines()  # regex file
-        #TODO: allow forcing ordering of contains
-        history_data = open( file2, 'U' ).read()
-        lines_diff = int( attributes.get( 'lines_diff', 0 ) )
-        line_diff_count = 0
-        while local_file:
-            contains = local_file.pop( 0 ).rstrip( '\n\r' )
-            if contains not in history_data:
-                line_diff_count += 1
-            if line_diff_count > lines_diff:
-                raise AssertionError( "Failed to find '%s' in history data. (lines_diff=%i):\n" % ( contains, lines_diff ) )
+        return files_diff(file1, file2, attributes=attributes)
 
     def find_hda_by_dataset_name( self, name, history=None ):
         if history is None:
@@ -1188,7 +1076,7 @@ class TwillTestCase( unittest.TestCase ):
                      template_refresh_field_contents='', template_fields=[], strings_displayed=[], strings_not_displayed=[],
                      strings_displayed_after_submit=[], strings_not_displayed_after_submit=[] ):
         """Add information to a library using an existing template with 2 elements"""
-        self.visit_url( "%s/library_common/folder_info?cntrller=%s&id=%s&library_id=%s" % \
+        self.visit_url( "%s/library_common/folder_info?cntrller=%s&id=%s&library_id=%s" %
                         ( self.url, cntrller, folder_id, library_id ) )
         if name and new_name and description:
             tc.fv( '1', "name", new_name )
@@ -1300,7 +1188,7 @@ class TwillTestCase( unittest.TestCase ):
         return jsondata[ 'state' ] in [ 'queued', 'running' ]
 
     def get_tags( self, item_id, item_class ):
-        self.visit_url( "%s/tag/get_tagging_elt_async?item_id=%s&item_class=%s" % \
+        self.visit_url( "%s/tag/get_tagging_elt_async?item_id=%s&item_class=%s" %
                         ( self.url, item_id, item_class ) )
 
     def history_as_xml_tree( self, show_deleted=False ):
@@ -1353,8 +1241,8 @@ class TwillTestCase( unittest.TestCase ):
     def import_datasets_to_histories( self, cntrller, library_id, ldda_ids='', new_history_name='Unnamed history', strings_displayed=[] ):
         # Can't use the ~/library_admin/libraries form as twill barfs on it so we'll simulate the form submission
         # by going directly to the form action
-        self.visit_url( '%s/library_common/import_datasets_to_histories?cntrller=%s&library_id=%s&ldda_ids=%s&new_history_name=%s&import_datasets_to_histories_button=Import+library+datasets' \
-                        % ( self.url, cntrller, library_id, ldda_ids, new_history_name ) )
+        self.visit_url( '%s/library_common/import_datasets_to_histories?cntrller=%s&library_id=%s&ldda_ids=%s&new_history_name=%s&import_datasets_to_histories_button=Import+library+datasets' %
+                        ( self.url, cntrller, library_id, ldda_ids, new_history_name ) )
         for check_str in strings_displayed:
             self.check_page_for_string( check_str )
 
@@ -1417,7 +1305,7 @@ class TwillTestCase( unittest.TestCase ):
 
     def ldda_info( self, cntrller, library_id, folder_id, ldda_id, strings_displayed=[], strings_not_displayed=[] ):
         """View library_dataset_dataset_association information"""
-        self.visit_url( "%s/library_common/ldda_info?cntrller=%s&library_id=%s&folder_id=%s&id=%s" % \
+        self.visit_url( "%s/library_common/ldda_info?cntrller=%s&library_id=%s&folder_id=%s&id=%s" %
                         ( self.url, cntrller, library_id, folder_id, ldda_id ) )
         for check_str in strings_displayed:
             self.check_page_for_string( check_str )
@@ -1431,7 +1319,7 @@ class TwillTestCase( unittest.TestCase ):
     def ldda_edit_info( self, cntrller, library_id, folder_id, ldda_id, ldda_name, new_ldda_name='', template_refresh_field_name='1_field_name',
                         template_refresh_field_contents='', template_fields=[], strings_displayed=[], strings_not_displayed=[] ):
         """Edit library_dataset_dataset_association information, optionally template element information"""
-        self.visit_url( "%s/library_common/ldda_edit_info?cntrller=%s&library_id=%s&folder_id=%s&id=%s" % \
+        self.visit_url( "%s/library_common/ldda_edit_info?cntrller=%s&library_id=%s&folder_id=%s&id=%s" %
                         ( self.url, cntrller, library_id, folder_id, ldda_id ) )
         check_str = 'Edit attributes of %s' % ldda_name
         self.check_page_for_string( check_str )
@@ -1507,7 +1395,10 @@ class TwillTestCase( unittest.TestCase ):
                 break
         self.assertNotEqual(count, maxiter)
 
-    def login( self, email='test@bx.psu.edu', password='testuser', username='admin-user', redirect='' ):
+    def login( self, email='test@bx.psu.edu', password='testuser', username='admin-user', redirect='', logout_first=True ):
+        # Clear cookies.
+        if logout_first:
+            self.logout()
         # test@bx.psu.edu is configured as an admin user
         previously_created, username_taken, invalid_username = \
             self.create( email=email, password=password, username=username, redirect=redirect )
@@ -1521,6 +1412,7 @@ class TwillTestCase( unittest.TestCase ):
     def logout( self ):
         self.visit_url( "%s/user/logout" % self.url )
         self.check_page_for_string( "You have been logged out" )
+        tc.browser.cj.clear()
 
     def make_accessible_via_link( self, history_id, strings_displayed=[], strings_displayed_after_submit=[] ):
         # twill barfs on this form, possibly because it contains no fields, but not sure.
@@ -1546,21 +1438,19 @@ class TwillTestCase( unittest.TestCase ):
 
     def makeTfname(self, fname=None):
         """safe temp name - preserve the file extension for tools that interpret it"""
-        suffix = os.path.split(fname)[-1]  # ignore full path
-        fd, temp_prefix = tempfile.mkstemp(prefix='tmp', suffix=suffix)
-        return temp_prefix
+        return make_temp_fname(fname)
 
     def manage_library_template_inheritance( self, cntrller, item_type, library_id, folder_id=None, ldda_id=None, inheritable=True ):
         # If inheritable is True, the item is currently inheritable.
         if item_type == 'library':
             url = "%s/library_common/manage_template_inheritance?cntrller=%s&item_type=%s&library_id=%s" % \
-            ( self.url, cntrller, item_type, library_id )
+                ( self.url, cntrller, item_type, library_id )
         elif item_type == 'folder':
             url = "%s/library_common/manage_template_inheritance?cntrller=%s&item_type=%s&library_id=%s&folder_id=%s" % \
-            ( self.url, cntrller, item_type, library_id, folder_id )
+                ( self.url, cntrller, item_type, library_id, folder_id )
         elif item_type == 'ldda':
             url = "%s/library_common/manage_template_inheritance?cntrller=%s&item_type=%s&library_id=%s&folder_id=%s&ldda_id=%s" % \
-            ( self.url, cntrller, item_type, library_id, folder_id, ldda_id )
+                ( self.url, cntrller, item_type, library_id, folder_id, ldda_id )
         self.visit_url( url )
         if inheritable:
             self.check_page_for_string = 'will no longer be inherited to contained folders and datasets'
@@ -1731,7 +1621,7 @@ class TwillTestCase( unittest.TestCase ):
     def rename_history( self, id, old_name, new_name ):
         """Rename an existing history"""
         self.visit_url( "/history/rename", params=dict( id=id, name=new_name ) )
-        check_str = 'History: %s renamed to: %s' % ( old_name, urllib.unquote( new_name ) )
+        check_str = 'History: %s renamed to: %s' % ( old_name, unquote( new_name ) )
         self.check_page_for_string( check_str )
 
     def rename_sample_datasets( self, sample_id, sample_dataset_ids, new_sample_dataset_names, strings_displayed=[], strings_displayed_after_submit=[] ):
@@ -1784,7 +1674,7 @@ class TwillTestCase( unittest.TestCase ):
     def save_log( *path ):
         """Saves the log to a file"""
         filename = os.path.join( *path )
-        file(filename, 'wt').write(buffer.getvalue())
+        open(filename, 'wt').write(buffer.getvalue())
 
     def set_history( self ):
         """Sets the history (stores the cookies for this run)"""
@@ -1863,17 +1753,17 @@ class TwillTestCase( unittest.TestCase ):
             if i == form_no:
                 break
         # To help with debugging a tool, print out the form controls when the test fails
-        print "form '%s' contains the following controls ( note the values )" % f.name
+        print("form '%s' contains the following controls ( note the values )" % f.name)
         controls = {}
         formcontrols = self.get_form_controls( f )
         hc_prefix = '<HiddenControl('
         for i, control in enumerate( f.controls ):
-            if not hc_prefix in str( control ):
+            if hc_prefix not in str( control ):
                 try:
-                    #check if a repeat element needs to be added
+                    # check if a repeat element needs to be added
                     if control.name is not None:
                         if control.name not in kwd and control.name.endswith( '_add' ):
-                            #control name doesn't exist, could be repeat
+                            # control name doesn't exist, could be repeat
                             repeat_startswith = control.name[0:-4]
                             if repeat_startswith and not [ c_name for c_name in controls.keys() if c_name.startswith( repeat_startswith ) ] and [ c_name for c_name in kwd.keys() if c_name.startswith( repeat_startswith ) ]:
                                 tc.browser.clicked( f, control )
@@ -1924,16 +1814,16 @@ class TwillTestCase( unittest.TestCase ):
                         if control.type == "checkbox":
                             def is_checked( value ):
                                 # Copied from form_builder.CheckboxField
-                                if value == True:
+                                if value is True:
                                     return True
                                 if isinstance( value, list ):
                                     value = value[0]
-                                return isinstance( value, basestring ) and value.lower() in ( "yes", "true", "on" )
+                                return isinstance( value, string_types ) and value.lower() in ( "yes", "true", "on" )
                             try:
                                 checkbox = control.get()
                                 checkbox.selected = is_checked( control_value )
-                            except Exception, e1:
-                                print "Attempting to set checkbox selected value threw exception: ", e1
+                            except Exception as e1:
+                                print("Attempting to set checkbox selected value threw exception: ", e1)
                                 # if there's more than one checkbox, probably should use the behaviour for
                                 # ClientForm.ListControl ( see twill code ), but this works for now...
                                 for elem in control_value:
@@ -1969,7 +1859,7 @@ class TwillTestCase( unittest.TestCase ):
                                     log.debug( formcontrol )
                                 log.exception( "Attempting to set control '%s' to value '%s' (also tried '%s') threw exception.", control.name, elem, elem_name )
                                 pass
-                except Exception, exc:
+                except Exception as exc:
                     for formcontrol in formcontrols:
                         log.debug( formcontrol )
                     errmsg = "Attempting to set field '%s' to value '%s' in form '%s' threw exception: %s\n" % ( control_name, str( control_value ), f.name, str( exc ) )
@@ -2128,7 +2018,7 @@ class TwillTestCase( unittest.TestCase ):
                     tc.config("readonly_controls_writeable", 1)
                     tc.fv( "tool_form", "NAME", name )
             tc.submit( "runtool_btn" )
-        except AssertionError, err:
+        except AssertionError as err:
             errmsg = "Uploading file resulted in the following exception.  Make sure the file (%s) exists.  " % filename
             errmsg += str( err )
             raise AssertionError( errmsg )
@@ -2148,11 +2038,11 @@ class TwillTestCase( unittest.TestCase ):
         """Pasted data in the upload utility"""
         self.visit_url( "/tool_runner/index?tool_id=upload1" )
         try:
-            self.refresh_form( "file_type", ftype ) #Refresh, to support composite files
+            self.refresh_form( "file_type", ftype )  # Refresh, to support composite files
             tc.fv( "tool_form", "dbkey", dbkey )
             tc.fv( "tool_form", "url_paste", url_paste )
             tc.submit( "runtool_btn" )
-        except Exception, e:
+        except Exception as e:
             errmsg = "Problem executing upload utility using url_paste: %s" % str( e )
             raise AssertionError( errmsg )
         # Make sure every history item has a valid hid
@@ -2183,41 +2073,25 @@ class TwillTestCase( unittest.TestCase ):
 
     def verify_composite_datatype_file_content( self, file_name, hda_id, base_name=None, attributes=None, dataset_fetcher=None, shed_tool_id=None ):
         dataset_fetcher = dataset_fetcher or self.__default_dataset_fetcher()
-        local_name = self.get_filename( file_name, shed_tool_id=shed_tool_id )
-        if base_name is None:
-            base_name = os.path.split(file_name)[-1]
-        temp_name = self.makeTfname(fname=base_name)
+
+        def get_filename(test_filename):
+            return self.get_filename(test_filename, shed_tool_id=shed_tool_id)
+
         data = dataset_fetcher( hda_id, base_name )
-        file( temp_name, 'wb' ).write( data )
-        if self.keepOutdir > '':
-            ofn = os.path.join(self.keepOutdir, base_name)
-            shutil.copy(temp_name, ofn)
-            log.debug('## GALAXY_TEST_SAVE=%s. saved %s' % (self.keepOutdir, ofn))
+        item_label = "History item %s" % hda_id
         try:
-            if attributes is None:
-                attributes = {}
-            compare = attributes.get( 'compare', 'diff' )
-            if compare == 'diff':
-                self.files_diff( local_name, temp_name, attributes=attributes )
-            elif compare == 're_match':
-                self.files_re_match( local_name, temp_name, attributes=attributes )
-            elif compare == 're_match_multiline':
-                self.files_re_match_multiline( local_name, temp_name, attributes=attributes )
-            elif compare == 'sim_size':
-                delta = attributes.get('delta', '100')
-                s1 = len(data)
-                s2 = os.path.getsize(local_name)
-                if abs(s1 - s2) > int(delta):
-                    raise Exception( 'Files %s=%db but %s=%db - compare (delta=%s) failed' % (temp_name, s1, local_name, s2, delta) )
-            else:
-                raise Exception( 'Unimplemented Compare type: %s' % compare )
-        except AssertionError, err:
-            errmsg = 'Composite file (%s) of History item %s different than expected, difference (using %s):\n' % ( base_name, hda_id, compare )
+            verify(
+                item_label,
+                data,
+                attributes=attributes,
+                filename=file_name,
+                get_filename=get_filename,
+                keep_outputs_dir=self.keepOutdir,
+            )
+        except AssertionError as err:
+            errmsg = 'Composite file (%s) of %s different than expected, difference:\n' % ( base_name, item_label )
             errmsg += str( err )
             raise AssertionError( errmsg )
-        finally:
-            if 'GALAXY_TEST_NO_CLEANUP' not in os.environ:
-                os.remove( temp_name )
 
     def verify_dataset_correctness( self, filename, hid=None, wait=True, maxseconds=120, attributes=None, shed_tool_id=None ):
         """Verifies that the attributes and contents of a history item meet expectations"""
@@ -2266,85 +2140,24 @@ class TwillTestCase( unittest.TestCase ):
 
     def verify_hid( self, filename, hda_id, attributes, shed_tool_id, hid="", dataset_fetcher=None):
         dataset_fetcher = dataset_fetcher or self.__default_dataset_fetcher()
+
+        def get_filename(test_filename):
+            return self.get_filename(test_filename, shed_tool_id=shed_tool_id)
+
+        def verify_extra_files(extra_files):
+            self.verify_extra_files_content(extra_files, hda_id, shed_tool_id=shed_tool_id, dataset_fetcher=dataset_fetcher)
+
         data = dataset_fetcher( hda_id )
-        if attributes is not None and attributes.get( "assert_list", None ) is not None:
-            try:
-                verify_assertions(data, attributes["assert_list"])
-            except AssertionError, err:
-                errmsg = 'History item %s different than expected\n' % (hid)
-                errmsg += str( err )
-                raise AssertionError( errmsg )
-        if attributes is not None and attributes.get("md5", None) is not None:
-            md5 = attributes.get("md5")
-            try:
-                self._verify_md5(data, md5)
-            except AssertionError, err:
-                errmsg = 'History item %s different than expected\n' % (hid)
-                errmsg += str( err )
-                raise AssertionError( errmsg )
-        if filename is not None:
-            local_name = self.get_filename( filename, shed_tool_id=shed_tool_id )
-            temp_name = self.makeTfname(fname=filename)
-            file( temp_name, 'wb' ).write( data )
-
-            # if the server's env has GALAXY_TEST_SAVE, save the output file to that dir
-            if self.keepOutdir:
-                ofn = os.path.join( self.keepOutdir, os.path.basename( local_name ) )
-                log.debug( 'keepoutdir: %s, ofn: %s', self.keepOutdir, ofn )
-                try:
-                    shutil.copy( temp_name, ofn )
-                except Exception, exc:
-                    error_log_msg = ( 'TwillTestCase could not save output file %s to %s: ' % ( temp_name, ofn ) )
-                    error_log_msg += str( exc )
-                    log.error( error_log_msg, exc_info=True )
-                else:
-                    log.debug('## GALAXY_TEST_SAVE=%s. saved %s' % ( self.keepOutdir, ofn ) )
-            try:
-                if attributes is None:
-                    attributes = {}
-                compare = attributes.get( 'compare', 'diff' )
-                if attributes.get( 'ftype', None ) == 'bam':
-                    local_fh, temp_name = self._bam_to_sam( local_name, temp_name )
-                    local_name = local_fh.name
-                extra_files = attributes.get( 'extra_files', None )
-                if compare == 'diff':
-                    self.files_diff( local_name, temp_name, attributes=attributes )
-                elif compare == 're_match':
-                    self.files_re_match( local_name, temp_name, attributes=attributes )
-                elif compare == 're_match_multiline':
-                    self.files_re_match_multiline( local_name, temp_name, attributes=attributes )
-                elif compare == 'sim_size':
-                    delta = attributes.get('delta', '100')
-                    s1 = len(data)
-                    s2 = os.path.getsize(local_name)
-                    if abs(s1 - s2) > int(delta):
-                        raise Exception( 'Files %s=%db but %s=%db - compare (delta=%s) failed' % (temp_name, s1, local_name, s2, delta) )
-                elif compare == "contains":
-                    self.files_contains( local_name, temp_name, attributes=attributes )
-                else:
-                    raise Exception( 'Unimplemented Compare type: %s' % compare )
-                if extra_files:
-                    self.verify_extra_files_content( extra_files, hda_id, shed_tool_id=shed_tool_id, dataset_fetcher=dataset_fetcher )
-            except AssertionError, err:
-                errmsg = 'History item %s different than expected, difference (using %s):\n' % ( hid, compare )
-                errmsg += "( %s v. %s )\n" % ( local_name, temp_name )
-                errmsg += str( err )
-                raise AssertionError( errmsg )
-            finally:
-                if 'GALAXY_TEST_NO_CLEANUP' not in os.environ:
-                    os.remove( temp_name )
-
-    def _verify_md5( self, data, expected_md5 ):
-        import md5
-        m = md5.new()
-        m.update( data )
-        actual_md5 = m.hexdigest()
-        if expected_md5 != actual_md5:
-            template = "Output md5sum [%s] does not match expected [%s]."
-            message = template % (actual_md5, expected_md5)
-            assert False, message
-
-
+        item_label = "History item %s" % hid
+        verify(
+            item_label,
+            data,
+            attributes=attributes,
+            filename=filename,
+            get_filename=get_filename,
+            keep_outputs_dir=self.keepOutdir,
+            verify_extra_files=verify_extra_files,
+        )
 
     def view_external_service( self, external_service_id, strings_displayed=[] ):
         self.visit_url( '%s/external_service/view_external_service?id=%s' % ( self.url, external_service_id ) )
@@ -2354,9 +2167,9 @@ class TwillTestCase( unittest.TestCase ):
     def view_form( self, id, form_type='', form_name='', form_desc='', form_layout_name='', field_dicts=[] ):
         '''View form details'''
         self.visit_url( "%s/forms/view_latest_form_definition?id=%s" % ( self.url, id ) )
-        #self.check_page_for_string( form_type )
+        # self.check_page_for_string( form_type )
         self.check_page_for_string( form_name )
-        #self.check_page_for_string( form_desc )
+        # self.check_page_for_string( form_desc )
         self.check_page_for_string( form_layout_name )
         for i, field_dict in enumerate( field_dicts ):
             self.check_page_for_string( field_dict[ 'label' ] )
@@ -2432,7 +2245,7 @@ class TwillTestCase( unittest.TestCase ):
                 key, value = query_parameter.split( '=' )
                 params[ key ] = value
         if params:
-            url += '?%s' % urllib.urlencode( params, doseq=doseq )
+            url += '?%s' % urlencode( params, doseq=doseq )
         new_url = tc.go( url )
         return_code = tc.browser.get_code()
         assert return_code in allowed_codes, 'Invalid HTTP return code %s, allowed codes: %s' % \
@@ -2446,18 +2259,25 @@ class TwillTestCase( unittest.TestCase ):
     def wait_for( self, func, **kwd ):
         sleep_amount = 0.2
         slept = 0
-        walltime_exceeded = 86400
+        walltime_exceeded = kwd.get("maxseconds", None)
+        if walltime_exceeded is None:
+            walltime_exceeded = DEFAULT_TOOL_TEST_WAIT
+
+        exceeded = True
         while slept <= walltime_exceeded:
             result = func()
             if result:
                 time.sleep( sleep_amount )
                 slept += sleep_amount
                 sleep_amount *= 2
-                if slept + sleep_amount > walltime_exceeded:
-                    sleep_amount = walltime_exceeded - slept  # don't overshoot maxseconds
             else:
+                exceeded = False
                 break
-        assert slept < walltime_exceeded, 'Tool run exceeded reasonable walltime of 24 hours, terminating.'
+
+        if exceeded:
+            message = 'Tool test run exceeded walltime [total %s, max %s], terminating.' % (slept, walltime_exceeded)
+            log.info(message)
+            raise AssertionError(message)
 
     def write_temp_file( self, content, suffix='.html' ):
         fd, fname = tempfile.mkstemp( suffix=suffix, prefix='twilltestcase-' )
@@ -2474,14 +2294,7 @@ class TwillTestCase( unittest.TestCase ):
             raise AssertionError( errmsg )
 
     def _check_command(self, command, description):
-        # TODO: also collect ``which samtools`` and ``samtools --version``
-        p = subprocess.Popen( args=command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True )
-        (stdout, stderr) = p.communicate()
-        if p.returncode:
-            template = description
-            template += " failed: (cmd=[%s], stdout=[%s], stderr=[%s])"
-            message = template % (command, stdout, stderr)
-            raise AssertionError(message)
+        check_command(command, description)
 
     def _bam_to_sam( self, local_name, temp_name ):
         temp_local = tempfile.NamedTemporaryFile( suffix='.sam', prefix='local_bam_converted_to_sam_' )
@@ -2495,6 +2308,7 @@ class TwillTestCase( unittest.TestCase ):
         return temp_local, temp_temp
 
     def _format_stream( self, output, stream, format ):
+        output = output or ''
         if format:
             msg = "---------------------- >> begin tool %s << -----------------------\n" % stream
             msg += output + "\n"

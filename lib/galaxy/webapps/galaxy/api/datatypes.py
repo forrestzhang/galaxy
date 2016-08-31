@@ -21,9 +21,9 @@ class DatatypesController( BaseAPIController ):
         Return an object containing upload datatypes.
         """
         datatypes_registry = self._datatypes_registry
-        extension_only = asbool( kwd.get( 'extension_only', True ) )
-        upload_only = asbool( kwd.get( 'upload_only', True ) )
         try:
+            extension_only = asbool( kwd.get( 'extension_only', True ) )
+            upload_only = asbool( kwd.get( 'upload_only', True ) )
             if extension_only:
                 if upload_only:
                     return datatypes_registry.upload_file_formats
@@ -38,6 +38,11 @@ class DatatypesController( BaseAPIController ):
                     dictionary = {}
                     for key in keys:
                         dictionary[key] = elem.get(key)
+                    extension = elem.get('extension')
+                    if extension in datatypes_registry.datatypes_by_extension:
+                        composite_files = datatypes_registry.datatypes_by_extension[ extension ].composite_files
+                        if composite_files:
+                            dictionary['composite_files'] = [_.dict() for _ in composite_files.itervalues()]
                     rval.append(dictionary)
                 return rval
         except Exception as exception:
@@ -117,6 +122,10 @@ class DatatypesController( BaseAPIController ):
     @expose_api_anonymous_and_sessionless
     def edam_formats( self, trans, **kwds ):
         return self._datatypes_registry.edam_formats
+
+    @expose_api_anonymous_and_sessionless
+    def edam_data( self, trans, **kwds ):
+        return self._datatypes_registry.edam_data
 
     @property
     def _datatypes_registry( self ):

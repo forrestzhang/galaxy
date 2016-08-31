@@ -5,13 +5,11 @@ Import one or more exported workflows contained within a specified tool shed rep
 Here is a working example of how to use this script to repair a repository installed into Galaxy.
 python ./import_workflows_from_installed_tool_shed_repository.py -a 22be3b -l http://localhost:8763/ -n workflow_with_tools -o test -r ef45bb64237e -u http://localhost:9009/
 """
-
-import os
-import sys
+from __future__ import print_function
 import argparse
-sys.path.insert( 0, os.path.dirname( __file__ ) )
-from common import display
-from common import submit
+
+from common import display, submit
+
 
 def clean_url( url ):
     if url.find( '//' ) > 0:
@@ -19,6 +17,7 @@ def clean_url( url ):
         items = url.split( '//' )
         return items[ 1 ].rstrip( '/' )
     return url.rstrip( '/' )
+
 
 def main( options ):
     api_key = options.api
@@ -41,16 +40,16 @@ def main( options ):
         url = '%s%s' % ( base_galaxy_url, '/api/tool_shed_repositories/%s/exported_workflows' % str( tool_shed_repository_id ) )
         exported_workflows = display( api_key, url, return_formatted=False )
         if exported_workflows:
-            # Import all of the workflows in the list of exported workflows.  
+            # Import all of the workflows in the list of exported workflows.
             data = {}
-            # NOTE: to import a single workflow, add an index to data (e.g., 
+            # NOTE: to import a single workflow, add an index to data (e.g.,
             # data[ 'index' ] = 0
             # and change the url to be ~/import_workflow (singular).  For example,
             # url = '%s%s' % ( base_galaxy_url, '/api/tool_shed_repositories/%s/import_workflow' % str( tool_shed_repository_id ) )
             url = '%s%s' % ( base_galaxy_url, '/api/tool_shed_repositories/%s/import_workflows' % str( tool_shed_repository_id ) )
             submit( options.api, url, data )
     else:
-        print "Invalid tool_shed / name / owner / changeset_revision."
+        print("Invalid tool_shed / name / owner / changeset_revision.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser( description='Import workflows contained in an installed tool shed repository via the Galaxy API.' )

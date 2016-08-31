@@ -34,25 +34,23 @@
     ${parent.javascripts()}
     ${h.js(
         "libs/jquery/jstorage",
-        "libs/jquery/jquery.rating",
-        "galaxy.panels",
         "libs/jquery/jquery.event.drag",
-        "libs/jquery/jquery.event.hover",
         "libs/jquery/jquery.mousewheel",
-        "libs/jquery/jquery-ui",
-        "libs/require",
         "libs/farbtastic",
         "libs/jquery/jquery.autocomplete",
-        "galaxy.autocom_tagging"
     )}
     ${community_tag_js( get_controller_name( item ) )}
 </%def>
 
 <%def name="stylesheets()">
     ${parent.stylesheets()}
-    ${h.css( "autocomplete_tagging", "embed_item", "jquery.rating" )}
-    ${h.css( "autocomplete_tagging", "trackster", "library",
-             "jquery-ui/smoothness/jquery-ui" )}
+    ${h.css(
+        "autocomplete_tagging",
+        "embed_item",
+        "jquery.rating",
+        "library",
+        "jquery-ui/smoothness/jquery-ui"
+    )}
 
     <style type="text/css">
         .page-body {
@@ -70,8 +68,8 @@
             border-top: 4px solid #DDDDDD;
         }
 
-        ## Make sure that history items and workflow steps do not get too long.
-        .historyItemContainer, .toolForm {
+        ## Make sure that workflow steps do not get too long.
+        .toolForm {
             max-width: 500px;
         }
 
@@ -81,12 +79,6 @@
             margin-bottom: 10px;
         }
 
-        ## Add border to history item container.
-        .historyItemContainer {
-            padding-right: 3px;
-            border-right-style: solid;
-            border-right-color: #66AA66;
-        }
     </style>
 </%def>
 
@@ -132,8 +124,11 @@
         href_to_user_items = href_to_user_items.replace( 'xxx', 'f-username')
     %>
 
-    <div class="unified-panel-header" unselectable="on">
+    <div class="unified-panel-header" unselectable="on" style="overflow: hidden">
         <div class="unified-panel-header-inner">
+            <div style="float: right">
+                ${self.render_item_links( item )}
+            </div>
             %if item.published:
                     <a href="${href_to_all_items}">Published ${item_plural}</a> |
                     <a href="${href_to_user_items}">${item.user.username}</a>
@@ -145,10 +140,6 @@
                 Private ${get_class_display_name( item.__class__ )}
             %endif
             | ${get_item_name( item ) | h}
-
-            <div style="float: right">
-                ${self.render_item_links( item )}
-            </div>
         </div>
     </div>
 

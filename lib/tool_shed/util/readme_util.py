@@ -1,20 +1,21 @@
+import json
 import logging
 import os
 import threading
 
 from mako.template import Template
 
-from galaxy import web
-from galaxy.util import json
-from galaxy.util import rst_to_html
-from galaxy.util import unicodify
-
 import tool_shed.util.shed_util_common as suc
+from galaxy import web
+from galaxy.util import rst_to_html, unicodify, url_get
 from tool_shed.util import basic_util
 from tool_shed.util import common_util
 from tool_shed.util import hg_util
+from tool_shed.util import metadata_util
+from tool_shed.util import repository_util
 
 log = logging.getLogger( __name__ )
+
 
 def build_readme_files_dict( app, repository, changeset_revision, metadata, tool_path=None ):
     """
@@ -26,7 +27,7 @@ def build_readme_files_dict( app, repository, changeset_revision, metadata, tool
         can_use_disk_files = True
     else:
         repo = hg_util.get_repo_for_repository( app, repository=repository, repo_path=None, create=False )
-        latest_downloadable_changeset_revision = suc.get_latest_downloadable_changeset_revision( app, repository, repo )
+        latest_downloadable_changeset_revision = metadata_util.get_latest_downloadable_changeset_revision( app, repository, repo )
         can_use_disk_files = changeset_revision == latest_downloadable_changeset_revision
     readme_files_dict = {}
     if metadata:
@@ -43,7 +44,7 @@ def build_readme_files_dict( app, repository, changeset_revision, metadata, tool
                         f = open( full_path_to_readme_file, 'r' )
                         text = unicodify( f.read() )
                         f.close()
-                    except Exception, e:
+                    except Exception as e:
                         log.exception( "Error reading README file '%s' from disk: %s" % ( str( relative_path_to_readme_file ), str( e ) ) )
                         text = None
                     if text:
@@ -56,7 +57,7 @@ def build_readme_files_dict( app, repository, changeset_revision, metadata, tool
                                 text_of_reasonable_length = suc.set_image_paths( app,
                                                                                  app.security.encode_id( repository.id ),
                                                                                  text_of_reasonable_length )
-                            except Exception, e:
+                            except Exception as e:
                                 log.exception( "Exception in build_readme_files_dict, so images may not be properly displayed:\n%s" % str( e ) )
                             finally:
                                 lock.release()
@@ -81,10 +82,11 @@ def build_readme_files_dict( app, repository, changeset_revision, metadata, tool
                             try:
                                 text = unicodify( fctx.data() )
                                 readme_files_dict[ readme_file_name ] = basic_util.size_string( text )
-                            except Exception, e:
-                                log.exception( "Error reading README file '%s' from repository manifest: %s" % \
+                            except Exception as e:
+                                log.exception( "Error reading README file '%s' from repository manifest: %s" %
                                                ( str( relative_path_to_readme_file ), str( e ) ) )
     return readme_files_dict
+
 
 def get_readme_files_dict_for_display( app, tool_shed_url, repo_info_dict ):
     """
@@ -94,15 +96,15 @@ def get_readme_files_dict_for_display( app, tool_shed_url, repo_info_dict ):
     name = repo_info_dict.keys()[ 0 ]
     repo_info_tuple = repo_info_dict[ name ]
     description, repository_clone_url, changeset_revision, ctx_rev, repository_owner, repository_dependencies, installed_td = \
-        suc.get_repo_info_tuple_contents( repo_info_tuple )
+        repository_util.get_repo_info_tuple_contents( repo_info_tuple )
     # Handle changing HTTP protocols over time.
     tool_shed_url = common_util.get_tool_shed_url_from_tool_shed_registry( app, tool_shed_url )
-    params = '?name=%s&owner=%s&changeset_revision=%s' % ( name, repository_owner, changeset_revision )
-    url = common_util.url_join( tool_shed_url,
-                                'repository/get_readme_files%s' % params )
-    raw_text = common_util.tool_shed_get( app, tool_shed_url, url )
+    params = dict( name=name, owner=repository_owner, changeset_revision=changeset_revision )
+    pathspec = [ 'repository', 'get_readme_files' ]
+    raw_text = url_get( tool_shed_url, password_mgr=app.tool_shed_registry.url_auth( tool_shed_url ), pathspec=pathspec, params=params )
     readme_files_dict = json.loads( raw_text )
     return readme_files_dict
+
 
 def get_readme_file_names( repository_name ):
     """Return a list of file names that will be categorized as README files for the received repository_name."""

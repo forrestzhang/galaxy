@@ -56,7 +56,7 @@ class AdminController( BaseUIController, Admin ):
                     # The received id is the repository id, so we need to get the id of the user
                     # that uploaded the repository.
                     repository_id = kwd.get( 'id', None )
-                    repository = suc.get_repository_in_tool_shed( trans.app, repository_id )
+                    repository = repository_util.get_repository_in_tool_shed( trans.app, repository_id )
                     kwd[ 'f-email' ] = repository.user.email
             elif operation == "repositories_by_category":
                 # Eliminate the current filters if any exist.
@@ -88,7 +88,7 @@ class AdminController( BaseUIController, Admin ):
             changeset_revision_str = 'changeset_revision_'
             if k.startswith( changeset_revision_str ):
                 repository_id = trans.security.encode_id( int( k.lstrip( changeset_revision_str ) ) )
-                repository = suc.get_repository_in_tool_shed( trans.app, repository_id )
+                repository = repository_util.get_repository_in_tool_shed( trans.app, repository_id )
                 if repository.tip( trans.app ) != v:
                     return trans.response.send_redirect( web.url_for( controller='repository',
                                                                       action='browse_repositories',
@@ -164,7 +164,7 @@ class AdminController( BaseUIController, Admin ):
             count = 0
             deleted_repositories = ""
             for repository_id in ids:
-                repository = suc.get_repository_in_tool_shed( trans.app, repository_id )
+                repository = repository_util.get_repository_in_tool_shed( trans.app, repository_id )
                 if repository:
                     if not repository.deleted:
                         # Mark all installable repository_metadata records as not installable.
@@ -262,9 +262,9 @@ class AdminController( BaseUIController, Admin ):
                 message = "The information has been saved for category '%s'" % escape( category.name )
                 status = 'done'
                 return trans.response.send_redirect( web.url_for( controller='admin',
-                                                                      action='manage_categories',
-                                                                      message=message,
-                                                                      status=status ) )
+                                                                  action='manage_categories',
+                                                                  message=message,
+                                                                  status=status ) )
         return trans.fill_template( '/webapps/tool_shed/category/edit_category.mako',
                                     category=category,
                                     message=message,
@@ -369,7 +369,6 @@ class AdminController( BaseUIController, Admin ):
     @web.require_admin
     def undelete_repository( self, trans, **kwd ):
         message = escape( kwd.get( 'message', '' ) )
-        status = kwd.get( 'status', 'done' )
         id = kwd.get( 'id', None )
         if id:
             # Undeleting multiple items is currently not allowed (allow_multiple=False), so there will only be 1 id.
@@ -377,7 +376,7 @@ class AdminController( BaseUIController, Admin ):
             count = 0
             undeleted_repositories = ""
             for repository_id in ids:
-                repository = suc.get_repository_in_tool_shed( trans.app, repository_id )
+                repository = repository_util.get_repository_in_tool_shed( trans.app, repository_id )
                 if repository:
                     if repository.deleted:
                         # Inspect all repository_metadata records to determine those that are installable, and mark
@@ -407,7 +406,6 @@ class AdminController( BaseUIController, Admin ):
                 message = "No selected repositories were marked deleted, so they could not be undeleted."
         else:
             message = "No repository ids received for undeleting."
-            status = 'error'
         trans.response.send_redirect( web.url_for( controller='admin',
                                                    action='browse_repositories',
                                                    message=util.sanitize_text( message ),
@@ -420,7 +418,6 @@ class AdminController( BaseUIController, Admin ):
         # sense to mark a category as deleted (category names and descriptions can be changed instead).
         # If we do this, and the following 2 methods can be eliminated.
         message = escape( kwd.get( 'message', '' ) )
-        status = kwd.get( 'status', 'done' )
         id = kwd.get( 'id', None )
         if id:
             ids = util.listify( id )
@@ -435,7 +432,6 @@ class AdminController( BaseUIController, Admin ):
                 message += " %s " % escape( category.name )
         else:
             message = "No category ids received for deleting."
-            status = 'error'
         trans.response.send_redirect( web.url_for( controller='admin',
                                                    action='manage_categories',
                                                    message=util.sanitize_text( message ),
@@ -448,7 +444,6 @@ class AdminController( BaseUIController, Admin ):
         # Purging a deleted Category deletes all of the following from the database:
         # - RepoitoryCategoryAssociations where category_id == Category.id
         message = escape( kwd.get( 'message', '' ) )
-        status = kwd.get( 'status', 'done' )
         id = kwd.get( 'id', None )
         if id:
             ids = util.listify( id )
@@ -466,7 +461,6 @@ class AdminController( BaseUIController, Admin ):
             message = "Purged %d categories: %s" % ( count, escape( purged_categories ) )
         else:
             message = "No category ids received for purging."
-            status = 'error'
         trans.response.send_redirect( web.url_for( controller='admin',
                                                    action='manage_categories',
                                                    message=util.sanitize_text( message ),
@@ -476,7 +470,6 @@ class AdminController( BaseUIController, Admin ):
     @web.require_admin
     def undelete_category( self, trans, **kwd ):
         message = escape( kwd.get( 'message', '' ) )
-        status = kwd.get( 'status', 'done' )
         id = kwd.get( 'id', None )
         if id:
             ids = util.listify( id )
@@ -495,7 +488,6 @@ class AdminController( BaseUIController, Admin ):
             message = "Undeleted %d categories: %s" % ( count, escape( undeleted_categories ) )
         else:
             message = "No category ids received for undeleting."
-            status = 'error'
         trans.response.send_redirect( web.url_for( controller='admin',
                                                    action='manage_categories',
                                                    message=util.sanitize_text( message ),

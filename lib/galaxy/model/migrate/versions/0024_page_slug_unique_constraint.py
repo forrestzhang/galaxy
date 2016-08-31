@@ -2,22 +2,21 @@
 Remove unique constraint from page slugs to allow creating a page with
 the same slug as a deleted page.
 """
-
-from sqlalchemy import *
-from migrate import *
-from migrate.changeset import *
+from __future__ import print_function
 
 import datetime
-now = datetime.datetime.utcnow
-
 import logging
-log = logging.getLogger( __name__ )
 
+from sqlalchemy import Index, MetaData, Table
+
+now = datetime.datetime.utcnow
+log = logging.getLogger( __name__ )
 metadata = MetaData()
+
 
 def upgrade(migrate_engine):
     metadata.bind = migrate_engine
-    print __doc__
+    print(__doc__)
     metadata.reflect()
 
     Page_table = Table( "page", metadata, autoload=True )
@@ -38,8 +37,7 @@ def upgrade(migrate_engine):
 
         Page_table.c.slug.alter( unique=False )
 
+
 def downgrade(migrate_engine):
     metadata.bind = migrate_engine
     metadata.reflect()
-    #Page_table = Table( "page", metadata, autoload=True )
-    #Page_table.c.slug.alter( unique=True )

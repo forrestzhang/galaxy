@@ -10,23 +10,22 @@ This file is printed to standard out. This script is designed to be
 run from the Galaxy root.
 
  % python script/edam_mapping.py > edam_mapping.tsv
-
 """
 from __future__ import absolute_import
 from __future__ import print_function
 
 import os
+import sys
 import urllib2
-
 from xml import etree
 
-# Setup model, paths, etc...
-import db_shell
+sys.path.insert(1, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, 'lib')))
 
+import galaxy.model
 import galaxy.datatypes.registry
 
 SCRIPTS_DIR = os.path.dirname(__file__)
-PROJECT_DIR = os.path.abspath(os.path.join(SCRIPTS_DIR, ".."))
+PROJECT_DIR = os.path.abspath(os.path.join(SCRIPTS_DIR, os.pardir))
 CONFIG_FILE = os.path.join(PROJECT_DIR, "config", "datatypes_conf.xml.sample")
 
 datatypes_registry = galaxy.datatypes.registry.Registry()

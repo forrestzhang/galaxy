@@ -3,13 +3,13 @@
 Utility functions used systemwide.
 
 """
-
 from __future__ import absolute_import
 
 import binascii
 import collections
 import errno
 import grp
+import json
 import logging
 import os
 import random
@@ -19,33 +19,35 @@ import smtplib
 import stat
 import string
 import sys
-import time
 import tempfile
 import threading
-import urlparse
-
-from galaxy.util import json
+import time
 from datetime import datetime
-
-from email.MIMEText import MIMEText
-
-from os.path import relpath
 from hashlib import md5
-from itertools import izip
+from os.path import normpath, relpath
+from xml.etree import ElementInclude, ElementTree
 
-from galaxy import eggs
+from six import binary_type, iteritems, PY3, string_types, text_type
+from six.moves import email_mime_text, email_mime_multipart, xrange, zip
+from six.moves.urllib import parse as urlparse
+from six.moves.urllib import request as urlrequest
 
-eggs.require( 'docutils' )
-import docutils.core
-import docutils.writers.html4css1
+try:
+    import docutils.core as docutils_core
+    import docutils.writers.html4css1 as docutils_html4css1
+except ImportError:
+    docutils_core = None
+    docutils_html4css1 = None
 
-from xml.etree import ElementTree, ElementInclude
-
-eggs.require( "wchartype" )
-import wchartype
-
-from .inflection import Inflector, English
+from .inflection import English, Inflector
 inflector = Inflector(English)
+
+if PY3:
+    def list_map(f, input):
+        return list(map(f, input))
+else:
+    list_map = map
+
 
 log = logging.getLogger(__name__)
 _lock = threading.RLock()
@@ -62,20 +64,19 @@ NULL_CHAR = '\000'
 BINARY_CHARS = [ NULL_CHAR ]
 
 
-def is_multi_byte( chars ):
-    for char in chars:
-        try:
-            char = unicode( char )
-        except UnicodeDecodeError:
-            # Probably binary
-            return False
-        if ( wchartype.is_asian( char ) or wchartype.is_full_width( char ) or
-             wchartype.is_kanji( char ) or wchartype.is_hiragana( char ) or
-             wchartype.is_katakana( char ) or wchartype.is_half_katakana( char )
-             or wchartype.is_hangul( char ) or wchartype.is_full_digit( char )
-             or wchartype.is_full_letter( char )):
-            return True
-    return False
+def remove_protocol_from_url( url ):
+    """ Supplied URL may be null, if not ensure http:// or https://
+    etc... is stripped off.
+    """
+    if url is None:
+        return url
+
+    # We have a URL
+    if url.find( '://' ) > 0:
+        new_url = url.split( '://' )[1]
+    else:
+        new_url = url
+    return new_url.rstrip( '/' )
 
 
 def is_binary( value, binary_chars=None ):
@@ -112,6 +113,35 @@ def is_uuid( value ):
         return False
 
 
+def directory_hash_id( id ):
+    """
+
+    >>> directory_hash_id( 100 )
+    ['000']
+    >>> directory_hash_id( "90000" )
+    ['090']
+    >>> directory_hash_id("777777777")
+    ['000', '777', '777']
+    >>> directory_hash_id("135ee48a-4f51-470c-ae2f-ce8bd78799e6")
+    ['1', '3', '5']
+    """
+    s = str( id )
+    l = len( s )
+    # Shortcut -- ids 0-999 go under ../000/
+    if l < 4:
+        return [ "000" ]
+    if not is_uuid(s):
+        # Pad with zeros until a multiple of three
+        padded = ( ( 3 - len( s ) % 3 ) * "0" ) + s
+        # Drop the last three digits -- 1000 files per directory
+        padded = padded[:-3]
+        # Break into chunks of three
+        return [ padded[ i * 3:(i + 1 ) * 3 ] for i in range( len( padded ) // 3 ) ]
+    else:
+        # assume it is a UUID
+        return list(iter(s[0:3]))
+
+
 def get_charset_from_http_headers( headers, default=None ):
     rval = headers.get('content-type', None )
     if rval and 'charset=' in rval:
@@ -142,7 +172,7 @@ def file_iter(fname, sep=None):
     >>> len(lines) !=  0
     True
     """
-    for line in file(fname):
+    for line in open(fname):
         if line and line[0] != '#':
             yield line.split(sep)
 
@@ -165,7 +195,8 @@ def unique_id(KEY_SIZE=128):
     >>> len(set(ids))
     1000
     """
-    return md5(str( random.getrandbits( KEY_SIZE ) )).hexdigest()
+    random_bits = text_type(random.getrandbits(KEY_SIZE)).encode("UTF-8")
+    return md5(random_bits).hexdigest()
 
 
 def parse_xml( fname ):
@@ -191,7 +222,7 @@ def xml_to_string( elem, pretty=False ):
         elem = pretty_print_xml( elem )
     try:
         return ElementTree.tostring( elem )
-    except TypeError, e:
+    except TypeError as e:
         # we assume this is a comment
         if hasattr( elem, 'text' ):
             return "<!-- %s -->\n" % ( elem.text )
@@ -222,17 +253,17 @@ def xml_element_to_dict( elem ):
     if sub_elems:
         sub_elem_dict = dict()
         for sub_sub_elem_dict in map( xml_element_to_dict, sub_elems ):
-            for key, value in sub_sub_elem_dict.iteritems():
+            for key, value in iteritems(sub_sub_elem_dict):
                 if key not in sub_elem_dict:
                     sub_elem_dict[ key ] = []
                 sub_elem_dict[ key ].append( value )
-        for key, value in sub_elem_dict.iteritems():
+        for key, value in iteritems(sub_elem_dict):
             if len( value ) == 1:
                 rval[ elem.tag ][ key ] = value[0]
             else:
                 rval[ elem.tag ][ key ] = value
     if elem.attrib:
-        for key, value in elem.attrib.iteritems():
+        for key, value in iteritems(elem.attrib):
             rval[ elem.tag ][ "@%s" % key ] = value
 
     if elem.text:
@@ -351,7 +382,14 @@ def pretty_print_time_interval( time=False, precise=False ):
         diff = now - datetime.fromtimestamp( time )
     elif isinstance( time, datetime ):
         diff = now - time
-    elif not time:
+    elif isinstance( time, string_types ):
+        try:
+            time = datetime.strptime( time, "%Y-%m-%dT%H:%M:%S.%f" )
+        except ValueError:
+            # MySQL may not support microseconds precision
+            time = datetime.strptime( time, "%Y-%m-%dT%H:%M:%S" )
+        diff = now - time
+    else:
         diff = now - now
     second_diff = diff.seconds
     day_diff = diff.days
@@ -402,7 +440,7 @@ def pretty_print_json(json_data, is_json_string=False):
     return json.dumps(json_data, sort_keys=True, indent=4)
 
 # characters that are valid
-valid_chars = set(string.letters + string.digits + " -=_.()/+*^,:?!")
+valid_chars = set(string.ascii_letters + string.digits + " -=_.()/+*^,:?!")
 
 # characters that are allowed but need to be escaped
 mapped_chars = { '>': '__gt__',
@@ -435,8 +473,8 @@ def sanitize_text( text, valid_characters=valid_chars, character_map=mapped_char
     and lists of strings; non-string entities will be cast to strings.
     """
     if isinstance( text, list ):
-        return map( lambda x: sanitize_text( x, valid_characters=valid_characters, character_map=character_map, invalid_character=invalid_character ), text )
-    if not isinstance( text, basestring ):
+        return list_map( lambda x: sanitize_text( x, valid_characters=valid_characters, character_map=character_map, invalid_character=invalid_character ), text )
+    if not isinstance( text, string_types ):
         text = smart_str( text )
     return _sanitize_text_helper( text, valid_characters=valid_characters, character_map=character_map )
 
@@ -471,10 +509,10 @@ def sanitize_lists_to_string( values, valid_characters=valid_chars, character_ma
 
 def sanitize_param( value, valid_characters=valid_chars, character_map=mapped_chars, invalid_character='X' ):
     """Clean incoming parameters (strings or lists)"""
-    if isinstance( value, basestring ):
+    if isinstance( value, string_types ):
         return sanitize_text( value, valid_characters=valid_characters, character_map=character_map, invalid_character=invalid_character )
     elif isinstance( value, list ):
-        return map( lambda x: sanitize_text( x, valid_characters=valid_characters, character_map=character_map, invalid_character=invalid_character ), value )
+        return list_map( lambda x: sanitize_text( x, valid_characters=valid_characters, character_map=character_map, invalid_character=invalid_character ), value )
     else:
         raise Exception('Unknown parameter type (%s)' % ( type( value ) ))
 
@@ -545,6 +583,30 @@ def ready_name_for_url( raw_name ):
     if slug_base.endswith('-'):
         slug_base = slug_base[:-1]
     return slug_base
+
+
+def which(file):
+    # http://stackoverflow.com/questions/5226958/which-equivalent-function-in-python
+    for path in os.environ["PATH"].split(":"):
+        if os.path.exists(path + "/" + file):
+                return path + "/" + file
+
+    return None
+
+
+def safe_makedirs(path):
+    """ Safely make a directory, do not fail if it already exist or
+    is created during execution.
+    """
+    if not os.path.exists(path):
+        try:
+            os.makedirs(path)
+        except OSError as e:
+            # review source for Python 2.7 this would only ever happen
+            # for the last path anyway so need to recurse - this exception
+            # means the last part of the path was already in existence.
+            if e.errno != errno.EEXIST:
+                raise
 
 
 def in_directory( file, directory, local_path_module=os.path ):
@@ -645,9 +707,11 @@ class Params( object ):
                 # name. Anything relying on NEVER_SANITIZE should be
                 # changed to not require this and NEVER_SANITIZE should be
                 # removed.
-                if key not in self.NEVER_SANITIZE and True not in [ key.endswith( "|%s" % nonsanitize_parameter ) for
-                                                                    nonsanitize_parameter in self.NEVER_SANITIZE ]:
-                    self.__dict__[ key ] = sanitize_param( value )
+                if (value is not None and
+                    key not in self.NEVER_SANITIZE and
+                    True not in [ key.endswith( "|%s" % nonsanitize_parameter ) for
+                                  nonsanitize_parameter in self.NEVER_SANITIZE ]):
+                        self.__dict__[ key ] = sanitize_param( value )
                 else:
                     self.__dict__[ key ] = value
         else:
@@ -690,10 +754,13 @@ def rst_to_html( s ):
     """Convert a blob of reStructuredText to HTML"""
     log = logging.getLogger( "docutils" )
 
+    if docutils_core is None:
+        raise Exception("Attempted to use rst_to_html but docutils unavailable.")
+
     class FakeStream( object ):
         def write( self, str ):
             if len( str ) > 0 and not str.isspace():
-                log.warn( str )
+                log.warning( str )
 
     settings_overrides = {
         "embed_stylesheet": False,
@@ -703,8 +770,8 @@ def rst_to_html( s ):
                                   # number of sections in help content.
     }
 
-    return unicodify( docutils.core.publish_string( s,
-                      writer=docutils.writers.html4css1.Writer(),
+    return unicodify( docutils_core.publish_string( s,
+                      writer=docutils_html4css1.Writer(),
                       settings_overrides=settings_overrides ) )
 
 
@@ -731,7 +798,7 @@ falsy = frozenset(['false', 'no', 'off', 'n', 'f', '0'])
 
 
 def asbool(obj):
-    if isinstance(obj, basestring):
+    if isinstance(obj, string_types):
         obj = obj.strip().lower()
         if obj in truthy:
             return True
@@ -743,7 +810,7 @@ def asbool(obj):
 
 
 def string_as_bool( string ):
-    if str( string ).lower() in ( 'true', 'yes', 'on' ):
+    if str( string ).lower() in ( 'true', 'yes', 'on', '1' ):
         return True
     else:
         return False
@@ -777,7 +844,7 @@ def listify( item, do_strip=False ):
         return []
     elif isinstance( item, list ):
         return item
-    elif isinstance( item, basestring ) and item.count( ',' ):
+    elif isinstance( item, string_types ) and item.count( ',' ):
         if do_strip:
             return [token.strip() for token in item.split( ',' )]
         else:
@@ -805,38 +872,54 @@ def roundify(amount, sfs=2):
         return amount[0:sfs] + '0' * (len(amount) - sfs)
 
 
-def unicodify( value, encoding=DEFAULT_ENCODING, error='replace', default=None ):
+def unicodify(value, encoding=DEFAULT_ENCODING, error='replace', default=None):
     """
-    Returns a unicode string or None
+    Returns a unicode string or None.
     """
-
-    if isinstance( value, unicode ):
-        return value
+    if value is None:
+        return None
     try:
-        return unicode( str( value ), encoding, error )
-    except:
+        if not isinstance(value, string_types) and not isinstance(value, binary_type):
+            # In Python 2, value is not an instance of basestring
+            # In Python 3, value is not an instance of bytes or str
+            value = str(value)
+        # Now in Python 2, value is an instance of basestring, but may be not unicode
+        # Now in Python 3, value is an instance of bytes or str
+        if not isinstance(value, text_type):
+            value = text_type(value, encoding, error)
+    except Exception:
+        log.exception("value %s could not be coerced to unicode" % value)
         return default
+    return value
 
 
-def smart_str(s, encoding='utf-8', strings_only=False, errors='strict'):
-    """
+def smart_str(s, encoding=DEFAULT_ENCODING, strings_only=False, errors='strict'):
+    u"""
     Returns a bytestring version of 's', encoded as specified in 'encoding'.
 
     If strings_only is True, don't convert (some) non-string-like objects.
 
     Adapted from an older, simpler version of django.utils.encoding.smart_str.
+
+    >>> assert smart_str(None) == b'None'
+    >>> assert smart_str(None, strings_only=True) is None
+    >>> assert smart_str(3) == b'3'
+    >>> assert smart_str(3, strings_only=True) == 3
+    >>> assert smart_str(b'a bytes string') == b'a bytes string'
+    >>> assert smart_str(u'a simple unicode string') == b'a simple unicode string'
+    >>> assert smart_str(u'à strange ünicode ڃtring') == b'\\xc3\\xa0 strange \\xc3\\xbcnicode \\xda\\x83tring'
+    >>> assert smart_str(b'\\xc3\\xa0n \\xc3\\xabncoded utf-8 string', encoding='latin-1') == b'\\xe0n \\xebncoded utf-8 string'
     """
     if strings_only and isinstance(s, (type(None), int)):
         return s
-    if not isinstance(s, basestring):
-        try:
-            return str(s)
-        except UnicodeEncodeError:
-            return unicode(s).encode(encoding, errors)
-    elif isinstance(s, unicode):
+    if not isinstance(s, string_types) and not isinstance(s, binary_type):
+        # In Python 2, s is not an instance of basestring
+        # In Python 3, s is not an instance of bytes or str
+        s = str(s)
+    if not isinstance(s, binary_type):
         return s.encode(encoding, errors)
-    elif s and encoding != 'utf-8':
-        return s.decode('utf-8', errors).encode(encoding, errors)
+    elif s and encoding != DEFAULT_ENCODING:
+        return s.decode(DEFAULT_ENCODING, errors).encode(encoding, errors)
     else:
         return s
 
@@ -950,8 +1033,8 @@ def read_dbnames(filename):
         man_builds.sort()
         man_builds = [(build, name) for name, build in man_builds]
         db_names = DBNames( db_names + man_builds )
-    except Exception, e:
-        print "ERROR: Unable to read builds file:", e
+    except Exception as e:
+        log.error( "ERROR: Unable to read builds file: %s", e )
     if len(db_names) < 1:
         db_names = DBNames( [( db_names.default_value, db_names.default_name )] )
     return db_names
@@ -977,7 +1060,7 @@ def read_build_sites( filename, check_builds=True ):
             except:
                 continue
     except:
-        print "ERROR: Unable to read builds for site file %s" % filename
+        log.error( "ERROR: Unable to read builds for site file %s", filename )
     return build_sites
 
 
@@ -1003,14 +1086,14 @@ def stringify_dictionary_keys( in_dict ):
     # changes unicode keys into strings, only works on top level (does not recurse)
     # unicode keys are not valid for expansion into keyword arguments on method calls
     out_dict = {}
-    for key, value in in_dict.iteritems():
+    for key, value in iteritems(in_dict):
         out_dict[ str( key ) ] = value
     return out_dict
 
 
 def recursively_stringify_dictionary_keys( d ):
     if isinstance(d, dict):
-        return dict([(k.encode( DEFAULT_ENCODING ), recursively_stringify_dictionary_keys(v)) for k, v in d.iteritems()])
+        return dict([(k.encode( DEFAULT_ENCODING ), recursively_stringify_dictionary_keys(v)) for k, v in iteritems(d)])
     elif isinstance(d, list):
         return [recursively_stringify_dictionary_keys(x) for x in d]
     else:
@@ -1031,7 +1114,7 @@ def mkstemp_ln( src, prefix='mkstemp_ln_' ):
         try:
             os.link( src, file )
             return (os.path.abspath(file))
-        except OSError, e:
+        except OSError as e:
             if e.errno == errno.EEXIST:
                 continue  # try again
             raise
@@ -1045,14 +1128,14 @@ def umask_fix_perms( path, umask, unmasked_perms, gid=None ):
     perms = unmasked_perms & ~umask
     try:
         st = os.stat( path )
-    except OSError, e:
+    except OSError as e:
         log.exception( 'Unable to set permissions or group on %s' % path )
         return
     # fix modes
     if stat.S_IMODE( st.st_mode ) != perms:
         try:
             os.chmod( path, perms )
-        except Exception, e:
+        except Exception as e:
             log.warning( 'Unable to honor umask (%s) for %s, tried to set: %s but mode remains %s, error was: %s' % ( oct( umask ),
                                                                                                                       path,
                                                                                                                       oct( perms ),
@@ -1062,7 +1145,7 @@ def umask_fix_perms( path, umask, unmasked_perms, gid=None ):
     if gid is not None and st.st_gid != gid:
         try:
             os.chown( path, -1, gid )
-        except Exception, e:
+        except Exception as e:
             try:
                 desired_group = grp.getgrgid( gid )
                 current_group = grp.getgrgid( st.st_gid )
@@ -1161,19 +1244,51 @@ def size_to_bytes( size ):
         return int( size )
 
 
-def send_mail( frm, to, subject, body, config ):
+def send_mail( frm, to, subject, body, config, html=None ):
     """
     Sends an email.
+
+    :type  frm: str
+    :param frm: from address
+
+    :type  to: str
+    :param to: to address
+
+    :type  subject: str
+    :param subject: Subject line
+
+    :type  body: str
+    :param body: Body text (should be plain text)
+
+    :type  config: object
+    :param config: Galaxy configuration object
+
+    :type  html: str
+    :param html: Alternative HTML representation of the body content. If
+                 provided will convert the message to a MIMEMultipart. (Default 'None')
     """
+
     to = listify( to )
-    msg = MIMEText(  body.encode( 'ascii', 'replace' ) )
+    if html:
+        msg = email_mime_multipart.MIMEMultipart('alternative')
+    else:
+        msg = email_mime_text.MIMEText(  body.encode( 'ascii', 'replace' ) )
+
     msg[ 'To' ] = ', '.join( to )
     msg[ 'From' ] = frm
     msg[ 'Subject' ] = subject
+
     if config.smtp_server is None:
         log.error( "Mail is not configured for this Galaxy instance." )
         log.info( msg )
         return
+
+    if html:
+        mp_text = email_mime_text.MIMEText( body.encode( 'ascii', 'replace' ), 'plain' )
+        mp_html = email_mime_text.MIMEText( html.encode( 'ascii', 'replace' ), 'html' )
+        msg.attach(mp_text)
+        msg.attach(mp_html)
+
     smtp_ssl = asbool( getattr(config, 'smtp_ssl', False ) )
     if smtp_ssl:
         s = smtplib.SMTP_SSL()
@@ -1184,26 +1299,26 @@ def send_mail( frm, to, subject, body, config ):
         try:
             s.starttls()
             log.debug( 'Initiated SSL/TLS connection to SMTP server: %s' % config.smtp_server )
-        except RuntimeError, e:
+        except RuntimeError as e:
             log.warning( 'SSL/TLS support is not available to your Python interpreter: %s' % e )
-        except smtplib.SMTPHeloError, e:
+        except smtplib.SMTPHeloError as e:
             log.error( "The server didn't reply properly to the HELO greeting: %s" % e )
             s.close()
             raise
-        except smtplib.SMTPException, e:
+        except smtplib.SMTPException as e:
             log.warning( 'The server does not support the STARTTLS extension: %s' % e )
     if config.smtp_username and config.smtp_password:
         try:
             s.login( config.smtp_username, config.smtp_password )
-        except smtplib.SMTPHeloError, e:
+        except smtplib.SMTPHeloError as e:
             log.error( "The server didn't reply properly to the HELO greeting: %s" % e )
             s.close()
             raise
-        except smtplib.SMTPAuthenticationError, e:
+        except smtplib.SMTPAuthenticationError as e:
             log.error( "The server didn't accept the username/password combination: %s" % e )
             s.close()
             raise
-        except smtplib.SMTPException, e:
+        except smtplib.SMTPException as e:
             log.error( "No suitable authentication method was found: %s" % e )
             s.close()
             raise
@@ -1214,7 +1329,7 @@ def send_mail( frm, to, subject, body, config ):
 def force_symlink( source, link_name ):
     try:
         os.symlink( source, link_name )
-    except OSError, e:
+    except OSError as e:
         if e.errno == errno.EEXIST:
             os.remove( link_name )
             os.symlink( source, link_name )
@@ -1241,7 +1356,7 @@ def safe_str_cmp(a, b):
     if len(a) != len(b):
         return False
     rv = 0
-    for x, y in izip(a, b):
+    for x, y in zip(a, b):
         rv |= ord(x) ^ ord(y)
     return rv == 0
 
@@ -1252,6 +1367,135 @@ def galaxy_directory():
     return os.path.abspath(galaxy_root_path)
 
 
+def config_directories_from_setting( directories_setting, galaxy_root=galaxy_root_path ):
+    """
+    Parse the ``directories_setting`` into a list of relative or absolute
+    filesystem paths that will be searched to discover plugins.
+
+    :type   galaxy_root:    string
+    :param  galaxy_root:    the root path of this galaxy installation
+    :type   directories_setting: string (default: None)
+    :param  directories_setting: the filesystem path (or paths)
+        to search for plugins. Can be CSV string of paths. Will be treated as
+        absolute if a path starts with '/', relative otherwise.
+    :rtype:                 list of strings
+    :returns:               list of filesystem paths
+    """
+    directories = []
+    if not directories_setting:
+        return directories
+
+    for directory in listify( directories_setting ):
+        directory = directory.strip()
+        if not directory.startswith( '/' ):
+            directory = os.path.join( galaxy_root, directory )
+        if not os.path.exists( directory ):
+            log.warning( 'directory not found: %s', directory )
+            continue
+        directories.append( directory )
+    return directories
+
+
+def parse_int(value, min_val=None, max_val=None, default=None, allow_none=False):
+    try:
+        value = int(value)
+        if min_val is not None and value < min_val:
+            return min_val
+        if max_val is not None and value > max_val:
+            return max_val
+        return value
+    except ValueError:
+        if allow_none:
+            if default is None or value == "None":
+                return None
+        if default:
+            return default
+        else:
+            raise
+
+
+def parse_non_hex_float( s ):
+    """
+    Parse string `s` into a float but throw a `ValueError` if the string is in
+    the otherwise acceptable format `\d+e\d+` (e.g. 40000000000000e5.)
+
+    This can be passed into `json.loads` to prevent a hex string in the above
+    format from being incorrectly parsed as a float in scientific notation.
+
+    >>> parse_non_hex_float( '123.4' )
+    123.4
+    >>> parse_non_hex_float( '2.45e+3' )
+    2450.0
+    >>> parse_non_hex_float( '2.45e-3' )
+    0.00245
+    >>> parse_non_hex_float( '40000000000000e5' )
+    Traceback (most recent call last):
+        ...
+    ValueError: could not convert string to float: 40000000000000e5
+    """
+    f = float( s )
+    # successfully parsed as float if here - check for format in original string
+    if 'e' in s and not ( '+' in s or '-' in s ):
+        raise ValueError( 'could not convert string to float: ' + s )
+    return f
+
+
+def build_url( base_url, port=80, scheme='http', pathspec=None, params=None, doseq=False ):
+    if params is None:
+        params = dict()
+    if pathspec is None:
+        pathspec = []
+    parsed_url = urlparse.urlparse( base_url )
+    if scheme != 'http':
+        parsed_url.scheme = scheme
+    if port != 80:
+        url = '%s://%s:%d/%s' % ( parsed_url.scheme, parsed_url.netloc.rstrip( '/' ), int( port ), parsed_url.path )
+    else:
+        url = '%s://%s/%s' % ( parsed_url.scheme, parsed_url.netloc.rstrip( '/' ), parsed_url.path.lstrip( '/' ) )
+    if len( pathspec ) > 0:
+        url = '%s/%s' % ( url.rstrip( '/' ), '/'.join( pathspec ) )
+    if parsed_url.query:
+        for query_parameter in parsed_url.query.split( '&' ):
+            key, value = query_parameter.split( '=' )
+            params[ key ] = value
+    if params:
+        url += '?%s' % urlparse.urlencode( params, doseq=doseq )
+    return url
+
+
+def url_get( base_url, password_mgr=None, pathspec=None, params=None ):
+    """Make contact with the uri provided and return any contents."""
+    # Uses system proxy settings if they exist.
+    proxy = urlrequest.ProxyHandler()
+    if password_mgr is not None:
+        auth = urlrequest.HTTPDigestAuthHandler( password_mgr )
+        urlopener = urlrequest.build_opener( proxy, auth )
+    else:
+        urlopener = urlrequest.build_opener( proxy )
+    urlrequest.install_opener( urlopener )
+    full_url = build_url( base_url, pathspec=pathspec, params=params )
+    response = urlopener.open( full_url )
+    content = response.read()
+    response.close()
+    return content
+
+
+def safe_relpath(path):
+    """
+    Given what we expect to be a relative path, determine whether the path
+    would exist inside the current directory.
+
+    :type   path:   string
+    :param  path:   a path to check
+    :rtype:         bool
+    :returns:       ``True`` if path is relative and does not reference a path
+        in a parent directory, ``False`` otherwise.
+    """
+    if path.startswith(os.sep) or normpath(path).startswith(os.pardir):
+        return False
+    return True
+
+
 class ExecutionTimer(object):
 
     def __init__(self):
@@ -1260,7 +1504,6 @@ class ExecutionTimer(object):
     def __str__(self):
         elapsed = (time.time() - self.begin) * 1000.0
         return "(%0.3f ms)" % elapsed
-
 
 if __name__ == '__main__':
     import doctest

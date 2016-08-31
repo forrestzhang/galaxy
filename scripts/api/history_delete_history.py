@@ -1,13 +1,14 @@
 #!/usr/bin/env python
+from __future__ import print_function
+import os
+import sys
 
-import os, sys
-sys.path.insert( 0, os.path.dirname( __file__ ) )
 from common import delete
 
 try:
     assert sys.argv[2]
 except IndexError:
-    print 'usage: %s key url [purge (true/false)] ' % os.path.basename( sys.argv[0] )
+    print('usage: %s key url [purge (true/false)] ' % os.path.basename( sys.argv[0] ))
     sys.exit( 1 )
 try:
     data = {}

@@ -3,18 +3,15 @@ Manager mixins to unify the interface into things that can contain: Datasets
 and other (nested) containers.
 
 (e.g. DatasetCollections, Histories, LibraryFolders)
-
-Histories should be DatasetCollections.
-Libraries should be DatasetCollections.
 """
+# Histories should be DatasetCollections.
+# Libraries should be DatasetCollections.
 
 import operator
 
 from galaxy import model
 import galaxy.exceptions
 import galaxy.util
-
-from galaxy.managers import base
 
 import logging
 log = logging.getLogger( __name__ )
@@ -31,12 +28,13 @@ class ContainerManagerMixin( object ):
     each of the methods below only work on the first level of
     nesting.
     """
+    # TODO: terminology is getting a bit convoluted and silly at this point: rename three public below?
     # TODO: this should be an open mapping (not just 2)
     #: the classes that can be contained
     contained_class = None
     subcontainer_class = None
-    #: how any contents lists produced are ordered
-    order_contents_on = None
+    #: how any contents lists produced are ordered - (string) attribute name to sort on or tuple of attribute names
+    default_order_by = None
 
     # ---- interface
     def contents( self, container ):
@@ -67,29 +65,11 @@ class ContainerManagerMixin( object ):
         query = self.session().query( content_class ).filter( container_filter )
         return query
 
-    def _filter_to_contained( self, container, content_class ):
+    def _get_filter_for_contained( self, container, content_class ):
         raise galaxy.exceptions.NotImplemented( 'Abstract class' )
 
     def _content_manager( self, content ):
         raise galaxy.exceptions.NotImplemented( 'Abstract class' )
-
-
-class HistoryAsContainerManagerMixin( ContainerManagerMixin ):
-
-    contained_class = model.HistoryDatasetAssociation
-    subcontainer_class = model.HistoryDatasetCollectionAssociation
-    order_contents_on = operator.attrgetter( 'hid' )
-
-    def _filter_to_contained( self, container, content_class ):
-        return content_class.history == container
-
-    def _content_manager( self, content ):
-        # type sniffing is inevitable
-        if   isinstance( content, model.HistoryDatasetAssociation ):
-            return self.hda_manager
-        elif isinstance( content, model.HistoryDatasetCollectionAssociation ):
-            return self.hdca_manager
-        raise TypeError( 'Unknown contents class: ' + str( content ) )
 
 
 class LibraryFolderAsContainerManagerMixin( ContainerManagerMixin ):
@@ -101,14 +81,14 @@ class LibraryFolderAsContainerManagerMixin( ContainerManagerMixin ):
     # subcontainer_class = model.LibraryDatasetCollectionAssociation
     order_contents_on = operator.attrgetter( 'create_time' )
 
-    def _filter_to_contained( self, container, content_class ):
+    def _get_filter_for_contained( self, container, content_class ):
         if content_class == self.subcontainer_class:
             return self.subcontainer_class.parent == container
         return self.contained_class.folder == container
 
     def _content_manager( self, content ):
         # type snifffing is inevitable
-        if   isinstance( content, model.LibraryDataset ):
+        if isinstance( content, model.LibraryDataset ):
             return self.lda_manager
         elif isinstance( content, model.LibraryFolder ):
             return self.folder_manager
@@ -122,12 +102,12 @@ class DatasetCollectionAsContainerManagerMixin( ContainerManagerMixin ):
     subcontainer_class = model.DatasetCollection
     order_contents_on = operator.attrgetter( 'element_index' )
 
-    def _filter_to_contained( self, container, content_class ):
+    def _get_filter_for_contained( self, container, content_class ):
         return content_class.collection == container
 
     def _content_manager( self, content ):
         # type snifffing is inevitable
-        if   isinstance( content, model.DatasetCollectionElement ):
+        if isinstance( content, model.DatasetCollectionElement ):
             return self.collection_manager
         elif isinstance( content, model.DatasetCollection ):
             return self.collection_manager

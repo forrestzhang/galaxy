@@ -1,13 +1,11 @@
 """
 Migration script to add the new_repo_alert column to the galaxy_user table.
 """
+import logging
+import sys
 
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
+from sqlalchemy import Boolean, Column, MetaData, Table
 
-import sys, logging
 log = logging.getLogger( __name__ )
 log.setLevel(logging.DEBUG)
 handler = logging.StreamHandler( sys.stdout )
@@ -17,6 +15,7 @@ handler.setFormatter( formatter )
 log.addHandler( handler )
 
 metadata = MetaData()
+
 
 def upgrade(migrate_engine):
     print __doc__
@@ -37,9 +36,10 @@ def upgrade(migrate_engine):
         else:
             log.debug("unknown migrate_engine dialect")
         migrate_engine.execute( "UPDATE galaxy_user SET new_repo_alert=%s" % default_false )
-    except Exception, e:
+    except Exception as e:
         print "Adding new_repo_alert column to the galaxy_user table failed: %s" % str( e )
         log.debug( "Adding new_repo_alert column to the galaxy_user table failed: %s" % str( e ) )
+
 
 def downgrade(migrate_engine):
     metadata.bind = migrate_engine
@@ -48,6 +48,6 @@ def downgrade(migrate_engine):
     User_table = Table( "galaxy_user", metadata, autoload=True )
     try:
         User_table.c.new_repo_alert.drop()
-    except Exception, e:
+    except Exception as e:
         print "Dropping column new_repo_alert from the galaxy_user table failed: %s" % str( e )
         log.debug( "Dropping column new_repo_alert from the galaxy_user table failed: %s" % str( e ) )

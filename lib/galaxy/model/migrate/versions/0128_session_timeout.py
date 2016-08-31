@@ -1,24 +1,21 @@
 """
 Migration script to add session update time (used for timeouts)
 """
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
-from galaxy.model.custom_types import *
+from __future__ import print_function
 
 import datetime
-now = datetime.datetime.utcnow
-
 import logging
-log = logging.getLogger( __name__ )
 
+from sqlalchemy import Column, DateTime, MetaData, Table
+
+now = datetime.datetime.utcnow
+log = logging.getLogger( __name__ )
 metadata = MetaData()
 
 
 def upgrade(migrate_engine):
     metadata.bind = migrate_engine
-    print __doc__
+    print(__doc__)
     metadata.reflect()
 
     lastaction_column = Column( "last_action", DateTime )
@@ -37,7 +34,7 @@ def __add_column(column, table_name, metadata, **kwds):
         table = Table( table_name, metadata, autoload=True )
         column.create( table, **kwds )
     except Exception as e:
-        print str(e)
+        print(str(e))
         log.exception( "Adding column %s failed." % column)
 
 
@@ -46,5 +43,5 @@ def __drop_column( column_name, table_name, metadata ):
         table = Table( table_name, metadata, autoload=True )
         getattr( table.c, column_name ).drop()
     except Exception as e:
-        print str(e)
+        print(str(e))
         log.exception( "Dropping column %s failed." % column_name )

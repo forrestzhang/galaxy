@@ -2,12 +2,18 @@
 Manage transfers from arbitrary URLs to temporary files.  Socket interface for
 IPC with multiple process configurations.
 """
-import os, subprocess, socket, logging, threading
+import json
+import logging
+import os
+import socket
+import subprocess
+import threading
 
-from galaxy import eggs
-from galaxy.util import listify, json
+from galaxy.util import listify, sleeper
+from galaxy.util.json import jsonrpc_request, validate_jsonrpc_response
 
 log = logging.getLogger( __name__ )
+
 
 class TransferManager( object ):
     """
@@ -20,9 +26,10 @@ class TransferManager( object ):
         if app.config.get_bool( 'enable_job_recovery', True ):
             # Only one Galaxy server process should be able to recover jobs! (otherwise you'll have nasty race conditions)
             self.running = True
-            self.sleeper = Sleeper()
+            self.sleeper = sleeper.Sleeper()
             self.restarter = threading.Thread( target=self.__restarter )
             self.restarter.start()
+
     def new( self, path=None, **kwd ):
         if 'protocol' not in kwd:
             raise Exception( 'Missing required parameter "protocol".' )
@@ -40,6 +47,7 @@ class TransferManager( object ):
         self.sa_session.add( transfer_job )
         self.sa_session.flush()
         return transfer_job
+
     def run( self, transfer_jobs ):
         """
         This method blocks, so if invoking the transfer manager ever starts
@@ -56,8 +64,6 @@ class TransferManager( object ):
         self.sa_session.add_all( transfer_jobs )
         self.sa_session.flush()
         for tj in transfer_jobs:
-            params_dict = tj.params
-            protocol = params_dict[ 'protocol' ]
             # The transfer script should daemonize fairly quickly - if this is
             # not the case, this process will need to be moved to a
             # non-blocking method.
@@ -72,19 +78,20 @@ class TransferManager( object ):
                 tj.info = 'Spawning transfer job failed: %s' % output.splitlines()[-1]
                 self.sa_session.add( tj )
                 self.sa_session.flush()
+
     def get_state( self, transfer_jobs, via_socket=False ):
         transfer_jobs = listify( transfer_jobs )
         rval = []
         for tj in transfer_jobs:
             if via_socket and tj.state not in tj.terminal_states and tj.socket:
                 try:
-                    request = json.jsonrpc_request( method='get_state', id=True )
+                    request = jsonrpc_request( method='get_state', id=True )
                     sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
                     sock.settimeout( 5 )
                     sock.connect( ( 'localhost', tj.socket ) )
                     sock.send( json.dumps( request ) )
                     response = sock.recv( 8192 )
-                    valid, response = json.validate_jsonrpc_response( response, id=request['id'] )
+                    valid, response = validate_jsonrpc_response( response, id=request['id'] )
                     if not valid:
                         # No valid response received, make some pseudo-json-rpc
                         raise Exception( dict( code=128, message='Did not receive valid response from transfer daemon for state' ) )
@@ -95,7 +102,7 @@ class TransferManager( object ):
                         # Request was valid
                         response['result']['transfer_job_id'] = tj.id
                         rval.append( response['result'] )
-                except Exception, e:
+                except Exception as e:
                     # State checking via the transfer daemon failed, just
                     # return the state from the database instead.  Callers can
                     # look for the 'error' member of the response to see why
@@ -116,11 +123,12 @@ class TransferManager( object ):
         if len( rval ) == 1:
             return rval[0]
         return rval
+
     def __restarter( self ):
         log.info( 'Transfer job restarter starting up...' )
         while self.running:
             dead = []
-            self.sa_session.expunge_all() # our session is threadlocal so this is safe.
+            self.sa_session.expunge_all()  # our session is threadlocal so this is safe.
             for tj in self.sa_session.query( self.app.model.TransferJob ) \
                           .filter( self.app.model.TransferJob.state == self.app.model.TransferJob.states.RUNNING ):
                 if not tj.pid:
@@ -145,22 +153,7 @@ class TransferManager( object ):
                 self.run( dead )
             self.sleeper.sleep( 30 )
         log.info( 'Transfer job restarter shutting down...' )
+
     def shutdown( self ):
         self.running = False
         self.sleeper.wake()
-
-class Sleeper( object ):
-    """
-    Provides a 'sleep' method that sleeps for a number of seconds *unless*
-    the notify method is called (from a different thread).
-    """
-    def __init__( self ):
-        self.condition = threading.Condition()
-    def sleep( self, seconds ):
-        self.condition.acquire()
-        self.condition.wait( seconds )
-        self.condition.release()
-    def wake( self ):
-        self.condition.acquire()
-        self.condition.notify()
-        self.condition.release()

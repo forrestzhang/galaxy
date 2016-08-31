@@ -1,11 +1,13 @@
 """
 Mixins for transaction-like objects.
 """
+import string
+from json import dumps
 
-import os
+from six import text_type
 
-from galaxy.util.json import dumps
 from galaxy.util import bunch
+
 
 class ProvidesAppContext( object ):
     """ For transaction-like objects to provide Galaxy convience layer for
@@ -19,7 +21,7 @@ class ProvidesAppContext( object ):
         Application-level logging of user actions.
         """
         if self.app.config.log_actions:
-            action = self.app.model.UserAction(action=action, context=context, params=unicode( dumps( params ) ) )
+            action = self.app.model.UserAction(action=action, context=context, params=text_type( dumps( params ) ) )
             try:
                 if user:
                     action.user = user
@@ -138,12 +140,19 @@ class ProvidesUserContext( object ):
 
     @property
     def user_ftp_dir( self ):
-        identifier = self.app.config.ftp_upload_dir_identifier
         base_dir = self.app.config.ftp_upload_dir
         if base_dir is None:
             return None
         else:
-            return os.path.join( base_dir, getattr( self.user, identifier ) )
+            # e.g. 'email' or 'username'
+            identifier_attr = self.app.config.ftp_upload_dir_identifier
+            identifier_value = getattr(self.user, identifier_attr)
+            template = self.app.config.ftp_upload_dir_template
+            path = string.Template(template).safe_substitute(dict(
+                ftp_upload_dir=base_dir,
+                ftp_upload_dir_identifier=identifier_value,
+            ))
+            return path
 
 
 class ProvidesHistoryContext( object ):
@@ -161,7 +170,7 @@ class ProvidesHistoryContext( object ):
         # If no history, return None.
         if self.history is None:
             return None
-#TODO: when does this happen? is it Bunch or util.bunch.Bunch?
+        # TODO: when does this happen? is it Bunch or util.bunch.Bunch?
         if isinstance( self.history, bunch.Bunch ):
             # The API presents a Bunch for a history.  Until the API is
             # more fully featured for handling this, also return None.

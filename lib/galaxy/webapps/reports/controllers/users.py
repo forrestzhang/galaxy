@@ -1,16 +1,17 @@
-from datetime import datetime, date, timedelta
 import calendar
-import operator
-from galaxy.web.base.controller import BaseUIController, web
-import galaxy.model
-from galaxy import util
-import pkg_resources
-pkg_resources.require( "SQLAlchemy >= 0.4" )
-import sqlalchemy as sa
-from galaxy.webapps.reports.controllers.query import ReportQueryBuilder
-from galaxy.webapps.reports.controllers.jobs import sorter
 import logging
+import operator
+import galaxy.model
+import sqlalchemy as sa
+
+from galaxy import util
+from galaxy.web.base.controller import BaseUIController, web
+from galaxy.webapps.reports.controllers.jobs import sorter
+from galaxy.webapps.reports.controllers.query import ReportQueryBuilder
+
+from datetime import datetime, date, timedelta
 from markupsafe import escape
+from sqlalchemy import false
 
 log = logging.getLogger( __name__ )
 
@@ -122,11 +123,11 @@ class Users( BaseUIController, ReportQueryBuilder ):
         def name_to_num(name):
             num = None
 
-            if name != None and name.lower() == 'zero':
+            if name is not None and name.lower() == 'zero':
                 num = 0
             else:
                 num = 1
-                
+
             return num
 
         if order == "desc":
@@ -140,7 +141,7 @@ class Users( BaseUIController, ReportQueryBuilder ):
         cutoff_time = datetime.utcnow() - timedelta( days=int( days_not_logged_in ) )
         users = []
         for user in trans.sa_session.query( galaxy.model.User ) \
-                                    .filter( galaxy.model.User.table.c.deleted == False ) \
+                                    .filter( galaxy.model.User.table.c.deleted == false() ) \
                                     .order_by( galaxy.model.User.table.c.email ):
             if user.galaxy_sessions:
                 last_galaxy_session = user.galaxy_sessions[ 0 ]
@@ -165,12 +166,12 @@ class Users( BaseUIController, ReportQueryBuilder ):
         sort_id = specs.sort_id
         order = specs.order
         arrow = specs.arrow
-        
+
         if order == "desc":
             _order = True
         else:
             _order = False
-        
+
         user_cutoff = int( kwd.get( 'user_cutoff', 60 ) )
         # disk_usage isn't indexed
         users = sorted( trans.sa_session.query( galaxy.model.User ).all(), key=operator.attrgetter( str(sort_id) ), reverse=_order )
@@ -182,4 +183,34 @@ class Users( BaseUIController, ReportQueryBuilder ):
                                     sort_id=sort_id,
                                     users=users,
                                     user_cutoff=user_cutoff,
+                                    message=message )
+
+    @web.expose
+    def history_per_user( self, trans, **kwd ):
+        message = escape( util.restore_text( kwd.get( 'message', '' ) ) )
+        user_cutoff = int( kwd.get( 'user_cutoff', 60 ) )
+        sorting = 0 if kwd.get( 'sorting', 'User' ) == 'User' else 1
+        descending = 1 if kwd.get( 'descending', 'desc' ) == 'desc' else -1
+        sorting_functions = [
+            lambda first, second: descending if first[0].lower() > second[0].lower() else -descending,
+            lambda first, second: descending if first[1] < second[1] else -descending ]
+
+        req = sa.select(
+            ( sa.func.count( galaxy.model.History.table.c.id ).label( 'history' ),
+              galaxy.model.User.table.c.username.label( 'username' ) ),
+            from_obj=[ sa.outerjoin( galaxy.model.History.table, galaxy.model.User.table ) ],
+            whereclause=galaxy.model.History.table.c.user_id == galaxy.model.User.table.c.id,
+            group_by=[ 'username' ],
+            order_by=[ sa.desc( 'username' ), 'history' ] )
+
+        histories = [ (_.username if _.username is not None else "Unknown", _.history) for _ in req.execute() ]
+        histories.sort( sorting_functions[ sorting ] )
+        if user_cutoff != 0:
+            histories = histories[:user_cutoff]
+
+        return trans.fill_template( '/webapps/reports/history_per_user.mako',
+                                    histories=histories,
+                                    user_cutoff=user_cutoff,
+                                    sorting=sorting,
+                                    descending=descending,
                                     message=message )

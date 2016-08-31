@@ -1,18 +1,15 @@
 """
 Migration script for job metric plugins.
 """
-
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
+from __future__ import print_function
 
 import datetime
-now = datetime.datetime.utcnow
-
 import logging
-log = logging.getLogger( __name__ )
 
+from sqlalchemy import Column, ForeignKey, Integer, MetaData, Numeric, Table, Unicode
+
+now = datetime.datetime.utcnow
+log = logging.getLogger( __name__ )
 metadata = MetaData()
 
 TEXT_METRIC_MAX_LENGTH = 1023
@@ -71,7 +68,7 @@ TABLES = [
 
 def upgrade( migrate_engine ):
     metadata.bind = migrate_engine
-    print __doc__
+    print(__doc__)
     metadata.reflect()
 
     for table in TABLES:
@@ -90,7 +87,7 @@ def __create(table):
     try:
         table.create()
     except Exception as e:
-        print str(e)
+        print(str(e))
         log.debug("Creating %s table failed: %s" % (table.name, str( e ) ) )
 
 
@@ -98,5 +95,5 @@ def __drop(table):
     try:
         table.drop()
     except Exception as e:
-        print str(e)
+        print(str(e))
         log.debug("Dropping %s table failed: %s" % (table.name, str( e ) ) )

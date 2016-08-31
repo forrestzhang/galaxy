@@ -1,21 +1,18 @@
 import inspect
-from traceback import format_exc
-from functools import wraps
-
-from galaxy import eggs
-eggs.require( "Paste" )
-import paste.httpexceptions
-
-from galaxy.web.framework import url_for
-from galaxy import util
-from galaxy.exceptions import error_codes
-from galaxy.exceptions import MessageException
-from galaxy.util.json import loads
-from galaxy.util.json import safe_dumps as dumps
-
 import logging
-log = logging.getLogger( __name__ )
+from functools import wraps
+from json import loads
+from traceback import format_exc
 
+import paste.httpexceptions
+from six import string_types
+
+from galaxy import util
+from galaxy.exceptions import error_codes, MessageException
+from galaxy.util.json import safe_dumps
+from galaxy.web.framework import url_for
+
+log = logging.getLogger( __name__ )
 
 JSON_CONTENT_TYPE = "application/json"
 
@@ -30,12 +27,14 @@ def _save_orig_fn( wrapped, orig ):
         wrapped._orig = orig
     return wrapped
 
+
 def expose( func ):
     """
     Decorator: mark a function as 'exposed' and thus web accessible
     """
     func.exposed = True
     return func
+
 
 def json( func, **json_kwargs ):
     """
@@ -45,16 +44,18 @@ def json( func, **json_kwargs ):
     @wraps(func)
     def call_and_format( self, trans, *args, **kwargs ):
         trans.response.set_content_type( JSON_CONTENT_TYPE )
-        return dumps( func( self, trans, *args, **kwargs ), **json_kwargs )
+        return safe_dumps( func( self, trans, *args, **kwargs ), **json_kwargs )
     if not hasattr( func, '_orig' ):
         call_and_format._orig = func
     return expose( _save_orig_fn( call_and_format, func ) )
+
 
 def json_pretty( func ):
     """
     Indent and sort returned JSON.
     """
     return json( func, indent=4, sort_keys=True )
+
 
 def require_login( verb="perform this action", use_panels=False, webapp='galaxy' ):
     def argcatcher( func ):
@@ -68,6 +69,7 @@ def require_login( verb="perform this action", use_panels=False, webapp='galaxy'
                     % ( url_for( controller='user', action='login', webapp=webapp ), verb ), use_panels=use_panels )
         return decorator
     return argcatcher
+
 
 def require_admin( func ):
     @wraps(func)
@@ -134,9 +136,9 @@ def expose_api( func, to_json=True, user_required=True ):
         try:
             rval = func( self, trans, *args, **kwargs)
             if to_json and trans.debug:
-                rval = dumps( rval, indent=4, sort_keys=True )
+                rval = safe_dumps( rval, indent=4, sort_keys=True )
             elif to_json:
-                rval = dumps( rval )
+                rval = safe_dumps( rval )
             return rval
         except paste.httpexceptions.HTTPException:
             raise  # handled
@@ -145,9 +147,11 @@ def expose_api( func, to_json=True, user_required=True ):
             raise paste.httpexceptions.HTTPServerError()
     return expose( _save_orig_fn( decorator, func ) )
 
-def __extract_payload_from_request(trans, func, kwargs):
-    content_type = trans.request.headers['content-type']
-    if content_type.startswith('application/x-www-form-urlencoded') or content_type.startswith('multipart/form-data'):
+
+def __extract_payload_from_request( trans, func, kwargs ):
+
+    content_type = trans.request.headers[ 'content-type' ]
+    if content_type.startswith( 'application/x-www-form-urlencoded' ) or content_type.startswith( 'multipart/form-data' ):
         # If the content type is a standard type such as multipart/form-data, the wsgi framework parses the request body
         # and loads all field values into kwargs. However, kwargs also contains formal method parameters etc. which
         # are not a part of the request body. This is a problem because it's not possible to differentiate between values
@@ -155,13 +159,16 @@ def __extract_payload_from_request(trans, func, kwargs):
         # in the payload. Therefore, the decorated method's formal arguments are discovered through reflection and removed from
         # the payload dictionary. This helps to prevent duplicate argument conflicts in downstream methods.
         payload = kwargs.copy()
-        named_args, _, _, _ = inspect.getargspec(func)
+        named_args, _, _, _ = inspect.getargspec( func )
         for arg in named_args:
-            payload.pop(arg, None)
+            payload.pop( arg, None )
         for k, v in payload.iteritems():
-            if isinstance(v, (str, unicode)):
+            if isinstance( v, string_types ):
                 try:
-                    payload[k] = loads(v)
+                    # note: parse_non_hex_float only needed here for single string values where something like
+                    # 40000000000000e5 will be parsed as a scientific notation float. This is as opposed to hex strings
+                    # in larger JSON structures where quoting prevents this (further below)
+                    payload[ k ] = loads( v, parse_float=util.parse_non_hex_float )
                 except:
                     # may not actually be json, just continue
                     pass
@@ -173,6 +180,7 @@ def __extract_payload_from_request(trans, func, kwargs):
         payload = util.recursively_stringify_dictionary_keys( loads( trans.request.body ) )
     return payload
 
+
 def expose_api_raw( func ):
     """
     Expose this function via the API but don't dump the results
@@ -180,12 +188,14 @@ def expose_api_raw( func ):
     """
     return expose_api( func, to_json=False )
 
+
 def expose_api_raw_anonymous( func ):
     """
     Expose this function via the API but don't dump the results
     to JSON.
     """
     return expose_api( func, to_json=False, user_required=False )
+
 
 def expose_api_anonymous( func, to_json=True ):
     """
@@ -250,9 +260,9 @@ def _future_expose_api( func, to_json=True, user_required=True, user_or_session_
         try:
             rval = func( self, trans, *args, **kwargs)
             if to_json and trans.debug:
-                rval = dumps( rval, indent=4, sort_keys=True )
+                rval = safe_dumps( rval, indent=4, sort_keys=True )
             elif to_json:
-                rval = dumps( rval )
+                rval = safe_dumps( rval )
             return rval
         except MessageException as e:
             traceback_string = format_exc()
@@ -276,6 +286,7 @@ def _future_expose_api( func, to_json=True, user_required=True, user_or_session_
         decorator._orig = func
     decorator.exposed = True
     return decorator
+
 
 def __api_error_message( trans, **kwds ):
     exception = kwds.get( "exception", None )
@@ -307,6 +318,7 @@ def __api_error_message( trans, **kwds ):
         error_response[ "traceback" ] = traceback_string
     return error_response
 
+
 def __api_error_response( trans, **kwds ):
     error_dict = __api_error_message( trans, **kwds )
     exception = kwds.get( "exception", None )
@@ -324,7 +336,7 @@ def __api_error_response( trans, **kwds ):
         # non-success (i.e. not 200 or 201) has been set, do not override
         # underlying controller.
         response.status = status_code
-    return dumps( error_dict )
+    return safe_dumps( error_dict )
 
 
 def _future_expose_api_anonymous( func, to_json=True ):
@@ -333,17 +345,21 @@ def _future_expose_api_anonymous( func, to_json=True ):
     """
     return _future_expose_api( func, to_json=to_json, user_required=False )
 
+
 def _future_expose_api_anonymous_and_sessionless( func, to_json=True ):
     """
     Expose this function via the API but don't require a user or a galaxy_session.
     """
     return _future_expose_api( func, to_json=to_json, user_required=False, user_or_session_required=False )
 
+
 def _future_expose_api_raw( func ):
     return _future_expose_api( func, to_json=False, user_required=True )
 
+
 def _future_expose_api_raw_anonymous( func ):
     return _future_expose_api( func, to_json=False, user_required=False )
+
 
 def _future_expose_api_raw_anonymous_and_sessionless( func ):
     return _future_expose_api( func, to_json=False, user_required=False, user_or_session_required=False )

@@ -49,9 +49,6 @@ class CondorJobRunner( AsynchronousJobRunner ):
         if not self.prepare_job( job_wrapper, include_metadata=include_metadata):
             return
 
-        # command line has been added to the wrapper by prepare_job()
-        command_line = job_wrapper.runner_command_line
-
         # get configured job destination
         job_destination = job_wrapper.job_destination
 
@@ -60,6 +57,14 @@ class CondorJobRunner( AsynchronousJobRunner ):
 
         # get destination params
         query_params = submission_params(prefix="", **job_destination.params)
+        container = None
+        universe = query_params.get('universe', None)
+        if universe and universe.strip().lower() == 'docker':
+            container = self.find_container( job_wrapper )
+            if container:
+                # HTCondor needs the image as 'docker_image'
+                query_params.update({'docker_image': container})
+
         galaxy_slots = query_params.get('request_cpus', None)
         if galaxy_slots:
             galaxy_slots_statement = 'GALAXY_SLOTS="%s"; export GALAXY_SLOTS_CONFIGURED="1"' % galaxy_slots
@@ -93,19 +98,17 @@ class CondorJobRunner( AsynchronousJobRunner ):
             slots_statement=galaxy_slots_statement,
         )
         try:
-            fh = file( executable, "w" )
-            fh.write( script )
-            fh.close()
-            os.chmod( executable, 0750 )
+            self.write_executable_script( executable, script )
         except:
             job_wrapper.fail( "failure preparing job script", exception=True )
             log.exception( "(%s) failure preparing job script" % galaxy_id_tag )
             return
 
+        cleanup_job = job_wrapper.cleanup_job
         try:
             open(submit_file, "w").write(submit_file_contents)
-        except:
-            if self.app.config.cleanup_job == "always":
+        except Exception:
+            if cleanup_job == "always":
                 cjs.cleanup()
                 # job_wrapper.fail() calls job_wrapper.cleanup()
             job_wrapper.fail( "failure preparing submit file", exception=True )
@@ -115,7 +118,7 @@ class CondorJobRunner( AsynchronousJobRunner ):
         # job was deleted while we were preparing it
         if job_wrapper.get_state() == model.Job.states.DELETED:
             log.debug( "Job %s deleted by user before it entered the queue" % galaxy_id_tag )
-            if self.app.config.cleanup_job in ( "always", "onsuccess" ):
+            if cleanup_job in ("always", "onsuccess"):
                 os.unlink( submit_file )
                 cjs.cleanup()
                 job_wrapper.cleanup()
@@ -177,7 +180,7 @@ class CondorJobRunner( AsynchronousJobRunner ):
             if not job_running and cjs.running:
                 log.debug( "(%s/%s) job has stopped running" % ( galaxy_id_tag, job_id ) )
                 # Will switching from RUNNING to QUEUED confuse Galaxy?
-                #cjs.job_wrapper.change_state( model.Job.states.QUEUED )
+                # cjs.job_wrapper.change_state( model.Job.states.QUEUED )
             if job_complete:
                 if cjs.job_wrapper.get_state() != model.Job.states.DELETED:
                     external_metadata = not asbool( cjs.job_wrapper.job_destination.params.get( "embed_metadata_in_job", True) )
@@ -218,7 +221,6 @@ class CondorJobRunner( AsynchronousJobRunner ):
         cjs.job_destination = job_wrapper.job_destination
         cjs.user_log = os.path.join( self.app.config.cluster_files_directory, 'galaxy_%s.condor.log' % galaxy_id_tag )
         cjs.register_cleanup_file_attribute( 'user_log' )
-        self.__old_state_paths( cjs )
         if job.state == model.Job.states.RUNNING:
             log.debug( "(%s/%s) is still in running state, adding to the DRM queue" % ( job.id, job.job_runner_external_id ) )
             cjs.running = True
@@ -227,15 +229,3 @@ class CondorJobRunner( AsynchronousJobRunner ):
             log.debug( "(%s/%s) is still in DRM queued state, adding to the DRM queue" % ( job.id, job.job_runner_external_id ) )
             cjs.running = False
             self.monitor_queue.put( cjs )
-
-    def __old_state_paths( self, cjs ):
-        """For recovery of jobs started prior to standardizing the naming of
-        files in the AsychronousJobState object
-        """
-        if cjs.job_wrapper is not None:
-            user_log = "%s/%s.condor.log" % (self.app.config.cluster_files_directory, cjs.job_wrapper.job_id)
-            if not os.path.exists( cjs.user_log ) and os.path.exists( user_log ):
-                cjs.output_file = "%s/%s.o" % (self.app.config.cluster_files_directory, cjs.job_wrapper.job_id)
-                cjs.error_file = "%s/%s.e" % (self.app.config.cluster_files_directory, cjs.job_wrapper.job_id)
-                cjs.job_file = "%s/galaxy_%s.sh" % (self.app.config.cluster_files_directory, cjs.job_wrapper.job_id)
-                cjs.user_log = user_log

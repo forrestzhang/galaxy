@@ -1,6 +1,7 @@
 import ConfigParser
 import os
 import sys
+
 import galaxy.config
 from tool_shed.galaxy_install import tool_migration_manager, installed_repository_manager
 
@@ -19,7 +20,7 @@ class MigrateToolsApplication( object, galaxy.config.ConfiguresGalaxyMixin ):
         if not os.path.exists( galaxy_config_file ):
             print "Galaxy config file does not exist (hint: use '-c config.ini' for non-standard locations): %s" % galaxy_config_file
             sys.exit( 1 )
-        config_parser = ConfigParser.ConfigParser( { 'here' : os.getcwd() } )
+        config_parser = ConfigParser.ConfigParser( { 'here': os.getcwd() } )
         config_parser.read( galaxy_config_file )
         galaxy_config_dict = {}
         for key, value in config_parser.items( "app:main" ):
@@ -41,7 +42,7 @@ class MigrateToolsApplication( object, galaxy.config.ConfiguresGalaxyMixin ):
         self._configure_toolbox()
 
         self._configure_tool_shed_registry()
-        
+
         self.installed_repository_manager = installed_repository_manager.InstalledRepositoryManager( self )
 
         # Get the latest tool migration script number to send to the Install manager.

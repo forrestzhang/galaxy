@@ -1,25 +1,25 @@
 """
 Interval datatypes
 """
-
-import pkg_resources
-pkg_resources.require( "bx-python" )
-
+import logging
+import math
 import os
 import sys
-import logging
 import tempfile
-import data
-from galaxy import util
-from galaxy.datatypes.sniff import *
-from galaxy.web import url_for
 import urllib
-from bx.intervals.io import *
+
+import numpy
+from bx.intervals.io import GenomicIntervalReader, ParseError
+
+from galaxy import util
 from galaxy.datatypes import metadata
 from galaxy.datatypes.metadata import MetadataElement
+from galaxy.datatypes.sniff import get_headers
 from galaxy.datatypes.tabular import Tabular
 from galaxy.datatypes.util.gff_util import parse_gff_attributes
-import math
+from galaxy.web import url_for
+
+import data
 import dataproviders
 
 log = logging.getLogger(__name__)
@@ -27,9 +27,9 @@ log = logging.getLogger(__name__)
 # Contains the meta columns and the words that map to it; list aliases on the
 # right side of the : in decreasing order of priority
 alias_spec = {
-    'chromCol'  : [ 'chrom' , 'CHROMOSOME' , 'CHROM', 'Chromosome Name' ],
-    'startCol'  : [ 'start' , 'START', 'chromStart', 'txStart', 'Start Position (bp)' ],
-    'endCol'    : [ 'end'   , 'END'  , 'STOP', 'chromEnd', 'txEnd', 'End Position (bp)'  ],
+    'chromCol'  : [ 'chrom', 'CHROMOSOME', 'CHROM', 'Chromosome Name' ],
+    'startCol'  : [ 'start', 'START', 'chromStart', 'txStart', 'Start Position (bp)' ],
+    'endCol'    : [ 'end', 'END', 'STOP', 'chromEnd', 'txEnd', 'End Position (bp)' ],
     'strandCol' : [ 'strand', 'STRAND', 'Strand' ],
     'nameCol'   : [ 'name', 'NAME', 'Name', 'name2', 'NAME2', 'Name2', 'Ensembl Gene ID', 'Ensembl Transcript ID', 'Ensembl Peptide ID' ]
 }
@@ -50,6 +50,7 @@ VIEWPORT_MAX_READS_PER_LINE = 10
 @dataproviders.decorators.has_dataproviders
 class Interval( Tabular ):
     """Tab delimited data containing interval information"""
+    edam_data = "data_3002"
     edam_format = "format_3475"
     file_ext = "interval"
     line_class = "region"
@@ -78,7 +79,7 @@ class Interval( Tabular ):
         if dataset.has_data():
             empty_line_count = 0
             num_check_lines = 100  # only check up to this many non empty lines
-            for i, line in enumerate( file( dataset.file_name ) ):
+            for i, line in enumerate( open( dataset.file_name ) ):
                 line = line.rstrip( '\r\n' )
                 if line:
                     if ( first_line_is_header or line[0] == '#' ):
@@ -163,7 +164,7 @@ class Interval( Tabular ):
                 end_col = int( dataset.metadata.endCol ) - 1
             # Scan lines of file to find a reasonable chromosome and range
             chrom = None
-            start = sys.maxint
+            start = sys.maxsize
             end = 0
             max_col = max( chrom_col, start_col, end_col )
             fh = open( dataset.file_name )
@@ -263,9 +264,9 @@ class Interval( Tabular ):
             internal_url = url_for( controller='dataset', dataset_id=dataset.id,
                                     action='display_at', filename='ucsc_' + site_name )
             display_url = urllib.quote_plus( "%s%s/display_as?id=%i&display_app=%s&authz_method=display_at"
-                    % (base_url, url_for( controller='root' ), dataset.id, type) )
+                                             % (base_url, url_for( controller='root' ), dataset.id, type) )
             redirect_url = urllib.quote_plus( "%sdb=%s&position=%s:%s-%s&hgt.customText=%%s"
-                    % (site_url, dataset.dbkey, chrom, start, stop ) )
+                                              % (site_url, dataset.dbkey, chrom, start, stop ) )
             link = '%s?redirect_url=%s&display_url=%s' % ( internal_url, redirect_url, display_url )
             ret_val.append( ( site_name, link ) )
         return ret_val
@@ -286,7 +287,7 @@ class Interval( Tabular ):
         while True:
             try:
                 reader.next()
-            except ParseError, e:
+            except ParseError as e:
                 errors.append(e)
             except StopIteration:
                 infile.close()
@@ -303,6 +304,7 @@ class Interval( Tabular ):
         This format is mostly used by galaxy itself.  Valid interval files should include
         a valid header comment, but this seems to be loosely regulated.
 
+        >>> from galaxy.datatypes.sniff import get_test_fname
         >>> fname = get_test_fname( 'test_space.txt' )
         >>> Interval().sniff( fname )
         False
@@ -374,7 +376,7 @@ class Interval( Tabular ):
 
 class BedGraph( Interval ):
     """Tab delimited chrom/start/end/datavalue dataset"""
-
+    edam_format = "format_3583"
     file_ext = "bedgraph"
     track_type = "LineTrack"
     data_sources = { "data": "bigwig", "index": "bigwig" }
@@ -413,7 +415,7 @@ class Bed( Interval ):
         """Sets the metadata information for datasets previously determined to be in bed format."""
         i = 0
         if dataset.has_data():
-            for i, line in enumerate( file(dataset.file_name) ):
+            for i, line in enumerate( open(dataset.file_name) ):
                 metadata_set = False
                 line = line.rstrip('\r\n')
                 if line and not line.startswith('#'):
@@ -487,6 +489,7 @@ class Bed( Interval ):
 
         For complete details see http://genome.ucsc.edu/FAQ/FAQformat#format1
 
+        >>> from galaxy.datatypes.sniff import get_test_fname
         >>> fname = get_test_fname( 'test_tab.bed' )
         >>> Bed().sniff( fname )
         True
@@ -580,7 +583,7 @@ class Bed( Interval ):
 
 class BedStrict( Bed ):
     """Tab delimited data in strict BED format - no non-standard columns allowed"""
-
+    edam_format = "format_3584"
     file_ext = "bedstrict"
 
     # no user change of datatype allowed
@@ -611,13 +614,13 @@ class BedStrict( Bed ):
 
 class Bed6( BedStrict ):
     """Tab delimited data in strict BED format - no non-standard columns allowed; column count forced to 6"""
-
+    edam_format = "format_3585"
     file_ext = "bed6"
 
 
 class Bed12( BedStrict ):
     """Tab delimited data in strict BED format - no non-standard columns allowed; column count forced to 12"""
-
+    edam_format = "format_3586"
     file_ext = "bed12"
 
 
@@ -639,6 +642,7 @@ class _RemoteCallMixin:
 @dataproviders.decorators.has_dataproviders
 class Gff( Tabular, _RemoteCallMixin ):
     """Tab delimited data in Gff format"""
+    edam_data = "data_1255"
     edam_format = "format_2305"
     file_ext = "gff"
     column_names = [ 'Seqname', 'Source', 'Feature', 'Start', 'End', 'Score', 'Strand', 'Frame', 'Group' ]
@@ -648,7 +652,7 @@ class Gff( Tabular, _RemoteCallMixin ):
     """Add metadata elements"""
     MetadataElement( name="columns", default=9, desc="Number of columns", readonly=True, visible=False )
     MetadataElement( name="column_types", default=['str', 'str', 'str', 'int', 'int', 'int', 'str', 'str', 'str'],
-        param=metadata.ColumnTypesParameter, desc="Column types", readonly=True, visible=False )
+                     param=metadata.ColumnTypesParameter, desc="Column types", readonly=True, visible=False )
 
     MetadataElement( name="attributes", default=0, desc="Number of attributes", readonly=True, visible=False, no_value=0 )
     MetadataElement( name="attribute_types", default={}, desc="Attribute types", param=metadata.DictParameter, readonly=True, visible=False, no_value=[] )
@@ -668,7 +672,7 @@ class Gff( Tabular, _RemoteCallMixin ):
         # not found in the first N lines will not have metadata.
         num_lines = 200
         attribute_types = {}
-        for i, line in enumerate( file( dataset.file_name ) ):
+        for i, line in enumerate( open( dataset.file_name ) ):
             if line and not line.startswith( '#' ):
                 elems = line.split( '\t' )
                 if len( elems ) == 9:
@@ -702,7 +706,7 @@ class Gff( Tabular, _RemoteCallMixin ):
         self.set_attribute_metadata( dataset )
 
         i = 0
-        for i, line in enumerate( file( dataset.file_name ) ):
+        for i, line in enumerate( open( dataset.file_name ) ):
             line = line.rstrip('\r\n')
             if line and not line.startswith( '#' ):
                 elems = line.split( '\t' )
@@ -729,7 +733,7 @@ class Gff( Tabular, _RemoteCallMixin ):
         if self.displayable( dataset ):
             try:
                 seqid = None
-                start = sys.maxint
+                start = sys.maxsize
                 stop = 0
                 fh = open( dataset.file_name )
                 while True:
@@ -741,14 +745,14 @@ class Gff( Tabular, _RemoteCallMixin ):
                             elems = line.rstrip( '\n\r' ).split()
                             if len( elems ) > 3:
                                 # line looks like:
-                                # ##sequence-region   ctg123 1 1497228
+                                # sequence-region   ctg123 1 1497228
                                 seqid = elems[1]  # IV
                                 start = int( elems[2] )  # 6000000
                                 stop = int( elems[3] )  # 6030000
                                 break  # use location declared in file
                             elif len( elems ) == 2 and elems[1].find( '..' ) > 0:
                                 # line looks like this:
-                                # ##sequence-region X:120000..140000
+                                # sequence-region X:120000..140000
                                 elems = elems[1].split( ':' )
                                 seqid = elems[0]
                                 start = int( elems[1].split( '..' )[0] )
@@ -791,7 +795,7 @@ class Gff( Tabular, _RemoteCallMixin ):
                         break
                 if seqid is not None:
                     return ( seqid, str( start ), str( stop ) )  # Necessary to return strings?
-            except Exception, e:
+            except Exception as e:
                 # unexpected error
                 log.exception( str( e ) )
         return ( None, None, None )  # could not determine viewport
@@ -830,6 +834,7 @@ class Gff( Tabular, _RemoteCallMixin ):
 
         For complete details see http://genome.ucsc.edu/FAQ/FAQformat#format3
 
+        >>> from galaxy.datatypes.sniff import get_test_fname
         >>> fname = get_test_fname( 'gff_version_3.gff' )
         >>> Gff().sniff( fname )
         False
@@ -899,7 +904,7 @@ class Gff3( Gff ):
 
     """Add metadata elements"""
     MetadataElement( name="column_types", default=['str', 'str', 'str', 'int', 'int', 'float', 'str', 'int', 'list'],
-        param=metadata.ColumnTypesParameter, desc="Column types", readonly=True, visible=False )
+                     param=metadata.ColumnTypesParameter, desc="Column types", readonly=True, visible=False )
 
     def __init__(self, **kwd):
         """Initialize datatype, by adding GBrowse display app"""
@@ -909,7 +914,7 @@ class Gff3( Gff ):
         self.set_attribute_metadata( dataset )
 
         i = 0
-        for i, line in enumerate( file( dataset.file_name ) ):
+        for i, line in enumerate( open( dataset.file_name ) ):
             line = line.rstrip('\r\n')
             if line and not line.startswith( '#' ):
                 elems = line.split( '\t' )
@@ -956,6 +961,7 @@ class Gff3( Gff ):
 
         For complete details see http://song.sourceforge.net/gff3.shtml
 
+        >>> from galaxy.datatypes.sniff import get_test_fname
         >>> fname = get_test_fname( 'test.gff' )
         >>> Gff3().sniff( fname )
         False
@@ -1010,7 +1016,7 @@ class Gtf( Gff ):
     """Add metadata elements"""
     MetadataElement( name="columns", default=9, desc="Number of columns", readonly=True, visible=False )
     MetadataElement( name="column_types", default=['str', 'str', 'str', 'int', 'int', 'float', 'str', 'int', 'list'],
-        param=metadata.ColumnTypesParameter, desc="Column types", readonly=True, visible=False )
+                     param=metadata.ColumnTypesParameter, desc="Column types", readonly=True, visible=False )
 
     def sniff( self, filename ):
         """
@@ -1026,6 +1032,7 @@ class Gtf( Gff ):
 
         For complete details see http://genome.ucsc.edu/FAQ/FAQformat#format4
 
+        >>> from galaxy.datatypes.sniff import get_test_fname
         >>> fname = get_test_fname( '1.bed' )
         >>> Gtf().sniff( fname )
         False
@@ -1095,7 +1102,7 @@ class Wiggle( Tabular, _RemoteCallMixin ):
         if self.displayable( dataset ):
             try:
                 chrom = None
-                start = sys.maxint
+                start = sys.maxsize
                 end = 0
                 span = 1
                 step = None
@@ -1148,7 +1155,7 @@ class Wiggle( Tabular, _RemoteCallMixin ):
                         break
                 if chrom is not None:
                     return ( chrom, str( start ), str( end ) )  # Necessary to return strings?
-            except Exception, e:
+            except Exception as e:
                 # unexpected error
                 log.exception( str( e ) )
         return ( None, None, None )  # could not determine viewport
@@ -1184,7 +1191,7 @@ class Wiggle( Tabular, _RemoteCallMixin ):
     def set_meta( self, dataset, overwrite=True, **kwd ):
         max_data_lines = None
         i = 0
-        for i, line in enumerate( file( dataset.file_name ) ):
+        for i, line in enumerate( open( dataset.file_name ) ):
             line = line.rstrip('\r\n')
             if line and not line.startswith( '#' ):
                 elems = line.split( '\t' )
@@ -1222,6 +1229,7 @@ class Wiggle( Tabular, _RemoteCallMixin ):
 
         For complete details see http://genome.ucsc.edu/goldenPath/help/wiggle.html
 
+        >>> from galaxy.datatypes.sniff import get_test_fname
         >>> fname = get_test_fname( 'interval1.bed' )
         >>> Wiggle().sniff( fname )
         False
@@ -1242,11 +1250,6 @@ class Wiggle( Tabular, _RemoteCallMixin ):
         """
         Assumes we have a numpy file.
         """
-        # Maybe if we import here people will still be able to use Galaxy when numpy kills it
-        pkg_resources.require("numpy>=1.2.1")
-
-        import numpy
-
         range = end - start
         # Determine appropriate resolution to plot ~1000 points
         resolution = ( 10 ** math.ceil( math.log10( range / 1000 ) ) )
@@ -1287,6 +1290,7 @@ class Wiggle( Tabular, _RemoteCallMixin ):
 
 class CustomTrack ( Tabular ):
     """UCSC CustomTrack"""
+    edam_format = "format_3588"
     file_ext = "customtrack"
 
     def __init__(self, **kwd):
@@ -1354,7 +1358,7 @@ class CustomTrack ( Tabular ):
                     if not max_line_count:
                         # exceeded viewport or total line count to check
                         break
-            except Exception, e:
+            except Exception as e:
                 # unexpected error
                 log.exception( str( e ) )
         return ( None, None, None )  # could not determine viewport
@@ -1381,6 +1385,7 @@ class CustomTrack ( Tabular ):
 
         track name="User Track" description="User Supplied Track (from Galaxy)" color=0,0,0 visibility=1
 
+        >>> from galaxy.datatypes.sniff import get_test_fname
         >>> fname = get_test_fname( 'complete.bed' )
         >>> CustomTrack().sniff( fname )
         False
@@ -1438,7 +1443,7 @@ class ENCODEPeak( Interval ):
     This format is used to provide called peaks of signal enrichment based on
     pooled, normalized (interpreted) data. It is a BED6+4 format.
     '''
-
+    edam_format = "format_3612"
     file_ext = "encodepeak"
     column_names = [ 'Chrom', 'Start', 'End', 'Name', 'Score', 'Strand', 'SignalValue', 'pValue', 'qValue', 'Peak' ]
     data_sources = { "data": "tabix", "index": "bigwig" }
@@ -1458,11 +1463,9 @@ class ChromatinInteractions( Interval ):
     '''
     Chromatin interactions obtained from 3C/5C/Hi-C experiments.
     '''
-
     file_ext = "chrint"
     track_type = "DiagonalHeatmapTrack"
     data_sources = { "data": "tabix", "index": "bigwig" }
-
     column_names = [ 'Chrom1', 'Start1', 'End1', 'Chrom2', 'Start2', 'End2', 'Value' ]
 
     """Add metadata elements"""
@@ -1477,6 +1480,88 @@ class ChromatinInteractions( Interval ):
     MetadataElement( name="columns", default=7, desc="Number of columns", readonly=True, visible=False )
 
     def sniff( self, filename ):
+        return False
+
+
+class ScIdx(Tabular):
+    """
+    ScIdx files are 1-based and consist of strand-specific coordinate counts.
+    They always have 5 columns, and the first row is the column labels:
+    'chrom', 'index', 'forward', 'reverse', 'value'.
+    Each line following the first consists of data:
+    chromosome name (type str), peak index (type int), Forward strand peak
+    count (type int), Reverse strand peak count (type int) and value (type int).
+    The value of the 5th 'value' column is the sum of the forward and reverse
+    peak count values.
+    """
+    file_ext = "scidx"
+
+    MetadataElement(name="columns", default=0, desc="Number of columns", readonly=True, visible=False)
+    MetadataElement(name="column_types", default=[], param=metadata.ColumnTypesParameter, desc="Column types", readonly=True, visible=False, no_value=[])
+
+    def __init__(self, **kwd):
+        """
+        Initialize scidx datatype.
+        """
+        Tabular.__init__(self, **kwd)
+        # Don't set column names since the first
+        # line of the dataset displays them.
+        self.column_names = ['chrom', 'index', 'forward', 'reverse', 'value']
+
+    def sniff(self, filename):
+        """
+        Checks for 'scidx-ness.'
+        """
+        try:
+            count = 0
+            fh = open(filename, "r")
+            while True:
+                line = fh.readline()
+                line = line.strip()
+                # The first line is always a comment like this:
+                # 2015-11-23 20:18:56.51;input.bam;READ1
+                if count == 0:
+                    if line.startswith('#'):
+                        count += 1
+                        continue
+                    else:
+                        return False
+                if not line:
+                    # EOF
+                    if count > 1:
+                        # The second line is always the labels:
+                        # chrom index forward reverse value
+                        # We need at least the column labels and a data line.
+                        return True
+                    return False
+                # Skip first line.
+                if count > 1:
+                    items = line.split('\t')
+                    if len(items) != 5:
+                        return False
+                    index = items[1]
+                    if not index.isdigit():
+                        return False
+                    forward = items[2]
+                    if not forward.isdigit():
+                        return False
+                    reverse = items[3]
+                    if not reverse.isdigit():
+                        return False
+                    value = items[4]
+                    if not value.isdigit():
+                        return False
+                    if int(forward) + int(reverse) != int(value):
+                        return False
+                if count == 100:
+                    return True
+                count += 1
+            if count < 100 and count > 0:
+                return True
+        except:
+            return False
+        finally:
+            fh.close()
         return False
 
 

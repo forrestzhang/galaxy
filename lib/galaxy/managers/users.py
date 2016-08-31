@@ -2,8 +2,6 @@
 Manager and Serializer for Users.
 """
 
-import pkg_resources
-pkg_resources.require( "SQLAlchemy >= 0.4" )
 import sqlalchemy
 
 from galaxy import model
@@ -13,6 +11,7 @@ from galaxy import util
 from galaxy.managers import base
 from galaxy.managers import deletable
 from galaxy.managers import api_keys
+from galaxy.security import validate_user_input
 
 import logging
 log = logging.getLogger( __name__ )
@@ -22,20 +21,19 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
     model_class = model.User
     foreign_key_name = 'user'
 
-    #TODO: there is quite a bit of functionality around the user (authentication, permissions, quotas, groups/roles)
+    # TODO: there is quite a bit of functionality around the user (authentication, permissions, quotas, groups/roles)
     #   most of which it may be unneccessary to have here
 
-    #TODO: incorp BaseAPIController.validate_in_users_and_groups
-    #TODO: incorp CreatesUsersMixin
-    #TODO: incorp CreatesApiKeysMixin
-    #TODO: incorporate security/validate_user_input.py
-    #TODO: incorporate UsesFormDefinitionsMixin?
+    # TODO: incorp BaseAPIController.validate_in_users_and_groups
+    # TODO: incorp CreatesUsersMixin
+    # TODO: incorp CreatesApiKeysMixin
+    # TODO: incorporate UsesFormDefinitionsMixin?
 
     def create( self, webapp_name=None, **kwargs ):
         """
         Create a new user.
         """
-        #TODO: deserialize and validate here
+        # TODO: deserialize and validate here
         email = kwargs[ 'email' ]
         username = kwargs[ 'username' ]
         password = kwargs[ 'password' ]
@@ -53,8 +51,8 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         self.session().add( user )
         try:
             self.session().flush()
-            #TODO:?? flush needed for permissions below? If not, make optional
-        except sqlalchemy.exc.IntegrityError, db_err:
+            # TODO:?? flush needed for permissions below? If not, make optional
+        except sqlalchemy.exc.IntegrityError as db_err:
             raise exceptions.Conflict( db_err.message )
 
         # can throw an sqlalx.IntegrityError if username not unique
@@ -66,13 +64,18 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
             self.app.security_agent.user_set_default_permissions( user, default_access_private=permissions )
         return user
 
+    def delete(self, user):
+        user.deleted = True
+        self.session().add(user)
+        self.session().flush()
+
     def _error_on_duplicate_email( self, email ):
         """
         Check for a duplicate email and raise if found.
 
         :raises exceptions.Conflict: if any are found
         """
-        #TODO: remove this check when unique=True is added to the email column
+        # TODO: remove this check when unique=True is added to the email column
         if self.by_email( email ) is not None:
             raise exceptions.Conflict( 'Email must be unique', email=email )
 
@@ -83,9 +86,9 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         """
         filters = self._munge_filters( self.model_class.email == email, filters )
         try:
-#TODO: use one_or_none
+            # TODO: use one_or_none
             return super( UserManager, self ).one( filters=filters, **kwargs )
-        except exceptions.ObjectNotFound, not_found:
+        except exceptions.ObjectNotFound:
             return None
 
     def by_email_like( self, email_with_wildcards, filters=None, order_by=None, **kwargs ):
@@ -141,7 +144,7 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         Raise an error if `user` is anonymous.
         """
         if user is None:
-            #TODO: code is correct (401) but should be named AuthenticationRequired (401 and 403 are flipped)
+            # TODO: code is correct (401) but should be named AuthenticationRequired (401 and 403 are flipped)
             raise exceptions.AuthenticationFailed( msg, **kwargs )
         return user
 
@@ -156,24 +159,23 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         """
         Create and return an API key for `user`.
         """
-        #TODO: seems like this should return the model
+        # TODO: seems like this should return the model
         return api_keys.ApiKeyManager( self.app ).create_api_key( user )
 
-    #TODO: possibly move to ApiKeyManager
+    # TODO: possibly move to ApiKeyManager
     def valid_api_key( self, user ):
         """
         Return this most recent APIKey for this user or None if none have been created.
         """
         query = ( self.session().query( model.APIKeys )
-                    .filter_by( user=user )
-                    .order_by( sqlalchemy.desc( model.APIKeys.create_time ) ) )
+                  .filter_by( user=user )
+                  .order_by( sqlalchemy.desc( model.APIKeys.create_time ) ) )
         all = query.all()
         if len( all ):
             return all[0]
         return None
-        #return query.first()
 
-    #TODO: possibly move to ApiKeyManager
+    # TODO: possibly move to ApiKeyManager
     def get_or_create_valid_api_key( self, user ):
         """
         Return this most recent APIKey for this user or create one if none have been
@@ -185,7 +187,9 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         return self.create_api_key( self, user )
 
     # ---- preferences
-
+    def preferences( self, user ):
+        log.warn(dict( (key, value) for key, value in user.preferences.items() ))
+        return dict( (key, value) for key, value in user.preferences.items() )
 
     # ---- roles and permissions
     def private_role( self, user ):
@@ -198,7 +202,7 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         return self.app.security_agent.user_get_default_permissions( user )
 
     def quota( self, user ):
-        #TODO: use quota manager
+        # TODO: use quota manager
         return self.app.quota_agent.get_percent( user=user )
 
     def tags_used( self, user, tag_models=None ):
@@ -206,7 +210,7 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         Return a list of distinct 'user_tname:user_value' strings that the
         given user has used.
         """
-        #TODO: simplify and unify with tag manager
+        # TODO: simplify and unify with tag manager
         if self.is_anonymous( user ):
             return []
 
@@ -217,7 +221,7 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         all_tags_query = None
         for tag_model in tag_models:
             subq = ( self.session().query( tag_model.user_tname, tag_model.user_value )
-                        .filter( tag_model.user == user ) )
+                     .filter( tag_model.user == user ) )
             all_tags_query = subq if all_tags_query is None else all_tags_query.union( subq )
 
         # if nothing init'd the query, bail
@@ -235,39 +239,39 @@ class UserManager( base.ModelManager, deletable.PurgableManagerMixin ):
         if self.is_anonymous( user ):
             return False
         request_types = self.app.security_agent.get_accessible_request_types( trans, user )
-        return ( user.requests or request_types )
+        return bool( user.requests or request_types )
 
 
 class UserSerializer( base.ModelSerializer, deletable.PurgableSerializerMixin ):
+    model_manager_class = UserManager
 
     def __init__( self, app ):
         """
         Convert a User and associated data to a dictionary representation.
         """
         super( UserSerializer, self ).__init__( app )
-        self.user_manager = UserManager( app )
+        self.user_manager = self.manager
 
         self.default_view = 'summary'
         self.add_view( 'summary', [
             'id', 'email', 'username'
         ])
         self.add_view( 'detailed', [
-            #'update_time',
-            #'create_time',
-
+            # 'update_time',
+            # 'create_time',
+            'is_admin',
             'total_disk_usage',
             'nice_total_disk_usage',
             'quota_percent',
+            'deleted',
+            'purged',
+            # 'active',
 
-            #'deleted',
-            #'purged',
-            #'active',
-
-            #'preferences',
-            # all tags
+            'preferences',
+            #  all tags
             'tags_used',
-            ## all annotations
-            #'annotations'
+            # all annotations
+            # 'annotations'
         ], include_keys_from='summary' )
 
     def add_serializers( self ):
@@ -280,22 +284,45 @@ class UserSerializer( base.ModelSerializer, deletable.PurgableSerializerMixin ):
             'update_time'   : self.serialize_date,
             'is_admin'      : lambda i, k, **c: self.user_manager.is_admin( i ),
 
+            'preferences'   : lambda i, k, **c: self.user_manager.preferences( i ),
+
             'total_disk_usage' : lambda i, k, **c: float( i.total_disk_usage ),
             'quota_percent' : lambda i, k, **c: self.user_manager.quota( i ),
 
             'tags_used'     : lambda i, k, **c: self.user_manager.tags_used( i ),
-            #TODO: 'has_requests' is more apt
-            'requests'      : lambda i, k, trans=None, **c: self.user_manager.has_requests( i, trans )
+            'has_requests'  : lambda i, k, trans=None, **c: self.user_manager.has_requests( i, trans )
         })
 
 
+class UserDeserializer( base.ModelDeserializer ):
+    """
+    Service object for validating and deserializing dictionaries that
+    update/alter users.
+    """
+    model_manager_class = UserManager
+
+    def add_deserializers( self ):
+        super( UserDeserializer, self ).add_deserializers()
+        self.deserializers.update({
+            'username'  : self.deserialize_username,
+        })
+
+    def deserialize_username( self, item, key, username, trans=None, **context ):
+        # TODO: validate_user_input requires trans and should(?) raise exceptions
+        # move validation to UserValidator and use self.app, exceptions instead
+        validation_error = validate_user_input.validate_publicname( trans, username, user=item )
+        if validation_error:
+            raise base.ModelDeserializingError( validation_error )
+        return self.default_deserializer( item, key, username, trans=trans, **context )
+
+
 class CurrentUserSerializer( UserSerializer ):
+    model_manager_class = UserManager
 
     def serialize( self, user, keys, **kwargs ):
         """
         Override to return at least some usage info if user is anonymous.
         """
-# hmmm.
         kwargs[ 'current_user' ] = user
         if self.user_manager.is_anonymous( user ):
             return self.serialize_current_anonymous_user( user, keys, **kwargs )
@@ -303,13 +330,14 @@ class CurrentUserSerializer( UserSerializer ):
 
     def serialize_current_anonymous_user( self, user, keys, trans=None, **kwargs ):
         # use the current history if any to get usage stats for trans' anonymous user
-        #TODO: might be better as sep. Serializer class
-        history = trans.history
-        if not history:
-            raise exceptions.AuthenticationRequired( 'No history for anonymous user usage stats' );
+        # TODO: might be better as sep. Serializer class
+        usage = 0
+        percent = None
 
-        usage = self.app.quota_agent.get_usage( trans, history=trans.history )
-        percent = self.app.quota_agent.get_percent( trans=trans, usage=usage )
+        history = trans.history
+        if history:
+            usage = self.app.quota_agent.get_usage( trans, history=trans.history )
+            percent = self.app.quota_agent.get_percent( trans=trans, usage=usage )
 
         # a very small subset of keys available
         values = {
@@ -326,13 +354,14 @@ class CurrentUserSerializer( UserSerializer ):
 
 
 class AdminUserFilterParser( base.ModelFilterParser, deletable.PurgableFiltersMixin ):
+    model_manager_class = UserManager
     model_class = model.User
 
     def _add_parsers( self ):
         super( AdminUserFilterParser, self )._add_parsers()
         deletable.PurgableFiltersMixin._add_parsers( self )
 
-        #PRECONDITION: user making the query has been verified as an admin
+        # PRECONDITION: user making the query has been verified as an admin
         self.orm_filter_parsers.update({
             'email'         : { 'op': ( 'eq', 'contains', 'like' ) },
             'username'      : { 'op': ( 'eq', 'contains', 'like' ) },

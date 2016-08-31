@@ -5,26 +5,15 @@ import sys
 import tempfile
 import traceback
 
-from galaxy import exceptions
-from galaxy import eggs
-from galaxy import util
-
-eggs.require( 'paramiko' )
-eggs.require( 'ssh' )
-eggs.require( 'Fabric' )
-
 from fabric.api import lcd
+from six import string_types
+from sqlalchemy import or_
 
-from galaxy.model.orm import or_
-
-from tool_shed.util import basic_util
-from tool_shed.util import common_util
-from tool_shed.util import encoding_util
-from tool_shed.util import hg_util
-from tool_shed.util import shed_util_common as suc
-from tool_shed.util import tool_dependency_util
-from tool_shed.util import tool_util
-from tool_shed.util import xml_util
+from galaxy import exceptions, util
+from galaxy.tools.deps import views
+from tool_shed.util import basic_util, common_util, encoding_util, hg_util, repository_util
+from tool_shed.util import shed_util_common as suc, tool_dependency_util
+from tool_shed.util import tool_util, xml_util
 
 from tool_shed.galaxy_install.datatypes import custom_datatype_manager
 from tool_shed.galaxy_install.metadata.installed_repository_metadata_manager import InstalledRepositoryMetadataManager
@@ -33,11 +22,9 @@ from tool_shed.galaxy_install.tool_dependencies.recipe.env_file_builder import E
 from tool_shed.galaxy_install.tool_dependencies.recipe.install_environment import InstallEnvironment
 from tool_shed.galaxy_install.tool_dependencies.recipe.recipe_manager import StepManager
 from tool_shed.galaxy_install.tool_dependencies.recipe.recipe_manager import TagManager
-from tool_shed.galaxy_install.tools import data_manager
-from tool_shed.galaxy_install.tools import tool_panel_manager
+from tool_shed.galaxy_install.tools import data_manager, tool_panel_manager
 
-from tool_shed.tools import data_table_manager
-from tool_shed.tools import tool_version_manager
+from tool_shed.tools import data_table_manager, tool_version_manager
 
 log = logging.getLogger( __name__ )
 
@@ -60,20 +47,16 @@ class InstallToolDependencyManager( object ):
     def get_tool_shed_repository_install_dir( self, tool_shed_repository ):
         return os.path.abspath( tool_shed_repository.repo_files_directory( self.app ) )
 
-    def install_and_build_package( self, tool_shed_repository, tool_dependency, actions_dict ):
+    def install_and_build_package( self, install_environment, tool_dependency, actions_dict ):
         """Install a Galaxy tool dependency package either via a url or a mercurial or git clone command."""
-        tool_shed_repository_install_dir = self.get_tool_shed_repository_install_dir( tool_shed_repository )
         install_dir = actions_dict[ 'install_dir' ]
         package_name = actions_dict[ 'package_name' ]
         actions = actions_dict.get( 'actions', None )
         filtered_actions = []
         env_file_builder = EnvFileBuilder( install_dir )
-        install_environment = InstallEnvironment( app=self.app,
-                                                  tool_shed_repository_install_dir=tool_shed_repository_install_dir,
-                                                  install_dir=install_dir )
         step_manager = StepManager( self.app )
         if actions:
-            with install_environment.make_tmp_dir() as work_dir:
+            with install_environment.use_tmp_dir() as work_dir:
                 with lcd( work_dir ):
                     # The first action in the list of actions will be the one that defines the initial download process.
                     # There are currently three supported actions; download_binary, download_by_url and clone via a
@@ -136,19 +119,19 @@ class InstallToolDependencyManager( object ):
                                 dir = tmp_dir
         return tool_dependency
 
-    def install_and_build_package_via_fabric( self, tool_shed_repository, tool_dependency, actions_dict ):
+    def install_and_build_package_via_fabric( self, install_environment, tool_shed_repository, tool_dependency, actions_dict ):
         try:
             # There is currently only one fabric method.
-            tool_dependency = self.install_and_build_package( tool_shed_repository, tool_dependency, actions_dict )
-        except Exception, e:
+            tool_dependency = self.install_and_build_package( install_environment, tool_dependency, actions_dict )
+        except Exception as e:
             log.exception( 'Error installing tool dependency %s version %s.', str( tool_dependency.name ), str( tool_dependency.version ) )
             # Since there was an installation error, update the tool dependency status to Error. The remove_installation_path option must
             # be left False here.
             error_message = '%s\n%s' % ( self.format_traceback(), str( e ) )
-            tool_dependency = tool_dependency_util.handle_tool_dependency_installation_error( self.app,
-                                                                                              tool_dependency,
-                                                                                              error_message,
-                                                                                              remove_installation_path=False )
+            tool_dependency = tool_dependency_util.set_tool_dependency_attributes(self.app,
+                                                                                  tool_dependency=tool_dependency,
+                                                                                  status=self.app.install_model.ToolDependency.installation_status.ERROR,
+                                                                                  error_message=error_message)
         tool_dependency = self.mark_tool_dependency_installed( tool_dependency )
         return tool_dependency
 
@@ -195,7 +178,7 @@ class InstallToolDependencyManager( object ):
                 attr_tup = ( name, version, type )
                 try:
                     index = attr_tups_of_dependencies_for_install.index( attr_tup )
-                except Exception, e:
+                except Exception as e:
                     index = None
                 if index is not None:
                     tool_dependency = tool_dependencies[ index ]
@@ -215,7 +198,7 @@ class InstallToolDependencyManager( object ):
                                                                     tool_shed_repository,
                                                                     tool_dependencies=tool_dependencies,
                                                                     from_tool_migration_manager=from_tool_migration_manager )
-                        except Exception, e:
+                        except Exception as e:
                             error_message = "Error installing tool dependency %s version %s: %s" % \
                                 ( str( name ), str( version ), str( e ) )
                             log.exception( error_message )
@@ -223,10 +206,10 @@ class InstallToolDependencyManager( object ):
                                 # Since there was an installation error, update the tool dependency status to Error. The
                                 # remove_installation_path option must be left False here.
                                 tool_dependency = \
-                                    tool_dependency_util.handle_tool_dependency_installation_error( self.app,
-                                                                                                    tool_dependency,
-                                                                                                    error_message,
-                                                                                                    remove_installation_path=False )
+                                    tool_dependency_util.set_tool_dependency_attributes(self.app,
+                                                                                        tool_dependency=tool_dependency,
+                                                                                        status=self.app.install_model.ToolDependency.installation_status.ERROR,
+                                                                                        error_message=error_message)
                         if tool_dependency and tool_dependency.status in [ self.install_model.ToolDependency.installation_status.INSTALLED,
                                                                            self.install_model.ToolDependency.installation_status.ERROR ]:
                             installed_packages.append( tool_dependency )
@@ -287,7 +270,10 @@ class InstallToolDependencyManager( object ):
             # TODO: this is not yet supported or functional, but when it is handle it using the fabric api.
             raise Exception( 'Tool dependency installation using proprietary fabric scripts is not yet supported.' )
         else:
-            tool_dependency = self.install_and_build_package_via_fabric( tool_shed_repository, tool_dependency, actions_dict )
+            tool_dependency = self.install_and_build_package_via_fabric( install_environment,
+                                                                         tool_shed_repository,
+                                                                         tool_dependency,
+                                                                         actions_dict )
         return tool_dependency
 
     def install_package( self, elem, tool_shed_repository, tool_dependencies=None, from_tool_migration_manager=False ):
@@ -438,9 +424,7 @@ class InstallToolDependencyManager( object ):
             status = self.install_model.ToolDependency.installation_status.INSTALLED
             tool_dependency = tool_dependency_util.set_tool_dependency_attributes( self.app,
                                                                                    tool_dependency=tool_dependency,
-                                                                                   status=status,
-                                                                                   error_message=None,
-                                                                                   remove_from_disk=False )
+                                                                                   status=status )
         return tool_dependency
 
 
@@ -449,6 +433,7 @@ class InstallRepositoryManager( object ):
     def __init__( self, app, tpm=None ):
         self.app = app
         self.install_model = self.app.install_model
+        self._view = views.DependencyResolversView(app)
         if tpm is None:
             self.tpm = tool_panel_manager.ToolPanelManager( self.app )
         else:
@@ -464,24 +449,25 @@ class InstallRepositoryManager( object ):
         received encoded_tsr_id by determining its location in the received
         encoded_tsr_ids list.
         """
-        for index, tsr_id in enumerate( encoded_tsr_ids ):
+        for tsr_id, repo_info_dict, tool_panel_section_key in zip( encoded_tsr_ids,
+                                                                   repo_info_dicts,
+                                                                   tool_panel_section_keys ):
             if tsr_id == encoded_tsr_id:
-                repo_info_dict = repo_info_dicts[ index ]
-                tool_panel_section_key = tool_panel_section_keys[ index ]
                 return repo_info_dict, tool_panel_section_key
         return None, None
 
     def __get_install_info_from_tool_shed( self, tool_shed_url, name, owner, changeset_revision ):
-        params = '?name=%s&owner=%s&changeset_revision=%s' % ( name, owner, changeset_revision )
-        url = common_util.url_join( tool_shed_url,
-                                    'api/repositories/get_repository_revision_install_info%s' % params )
+        params = dict( name=str( name ),
+                       owner=str( owner ),
+                       changeset_revision=str( changeset_revision ) )
+        pathspec = [ 'api', 'repositories', 'get_repository_revision_install_info' ]
         try:
-            raw_text = common_util.tool_shed_get( self.app, tool_shed_url, url )
-        except Exception, e:
+            raw_text = util.url_get( tool_shed_url, password_mgr=self.app.tool_shed_registry.url_auth( tool_shed_url ), pathspec=pathspec, params=params )
+        except Exception as e:
             message = "Error attempting to retrieve installation information from tool shed "
             message += "%s for revision %s of repository %s owned by %s: %s" % \
                 ( str( tool_shed_url ), str( changeset_revision ), str( name ), str( owner ), str( e ) )
-            log.warn( message )
+            log.warning( message )
             raise exceptions.InternalServerError( message )
         if raw_text:
             # If successful, the response from get_repository_revision_install_info will be 3
@@ -494,7 +480,7 @@ class InstallRepositoryManager( object ):
         else:
             message = "Unable to retrieve installation information from tool shed %s for revision %s of repository %s owned by %s: %s" % \
                 ( str( tool_shed_url ), str( changeset_revision ), str( name ), str( owner ), str( e ) )
-            log.warn( message )
+            log.warning( message )
             raise exceptions.InternalServerError( message )
         # Make sure the tool shed returned everything we need for installing the repository.
         if not repository_revision_dict or not repo_info_dict:
@@ -510,7 +496,7 @@ class InstallRepositoryManager( object ):
 
     def __handle_repository_contents( self, tool_shed_repository, tool_path, repository_clone_url, relative_install_dir,
                                       tool_shed=None, tool_section=None, shed_tool_conf=None, reinstalling=False,
-                                      tool_versions_response=None ):
+                                      tool_versions_response=None, tool_panel_section_mapping={} ):
         """
         Generate the metadata for the installed tool shed repository, among other things.
         This method is called when an administrator is installing a new repository or
@@ -533,7 +519,7 @@ class InstallRepositoryManager( object ):
         irmm_metadata_dict = irmm.get_metadata_dict()
         tool_shed_repository.metadata = irmm_metadata_dict
         # Update the tool_shed_repository.tool_shed_status column in the database.
-        tool_shed_status_dict = suc.get_tool_shed_status_for_installed_repository( self.app, tool_shed_repository )
+        tool_shed_status_dict = repository_util.get_tool_shed_status_for_installed_repository( self.app, tool_shed_repository )
         if tool_shed_status_dict:
             tool_shed_repository.tool_shed_status = tool_shed_status_dict
         self.install_model.context.add( tool_shed_repository )
@@ -588,7 +574,8 @@ class InstallRepositoryManager( object ):
                                             owner=tool_shed_repository.owner,
                                             shed_tool_conf=shed_tool_conf,
                                             tool_panel_dict=tool_panel_dict,
-                                            new_install=True )
+                                            new_install=True,
+                                            tool_panel_section_mapping=tool_panel_section_mapping )
         if 'data_manager' in irmm_metadata_dict:
             dmh = data_manager.DataManagerHandler( self.app )
             dmh.install_data_managers( self.app.config.shed_data_manager_config_file,
@@ -657,6 +644,7 @@ class InstallRepositoryManager( object ):
         includes_tools = installation_dict[ 'includes_tools' ]
         includes_tools_for_display_in_tool_panel = installation_dict[ 'includes_tools_for_display_in_tool_panel' ]
         install_repository_dependencies = installation_dict[ 'install_repository_dependencies' ]
+        install_resolver_dependencies = installation_dict['install_resolver_dependencies']
         install_tool_dependencies = installation_dict[ 'install_tool_dependencies' ]
         message = installation_dict[ 'message' ]
         new_tool_panel_section_label = installation_dict[ 'new_tool_panel_section_label' ]
@@ -664,6 +652,7 @@ class InstallRepositoryManager( object ):
         status = installation_dict[ 'status' ]
         tool_panel_section_id = installation_dict[ 'tool_panel_section_id' ]
         tool_panel_section_keys = installation_dict[ 'tool_panel_section_keys' ]
+        tool_panel_section_mapping = installation_dict.get( 'tool_panel_section_mapping', {} )
         tool_path = installation_dict[ 'tool_path' ]
         tool_shed_url = installation_dict[ 'tool_shed_url' ]
         # Handle contained tools.
@@ -671,12 +660,19 @@ class InstallRepositoryManager( object ):
             self.tpm.handle_tool_panel_section( self.app.toolbox,
                                                 tool_panel_section_id=tool_panel_section_id,
                                                 new_tool_panel_section_label=new_tool_panel_section_label )
+        if includes_tools_for_display_in_tool_panel and ( tool_panel_section_mapping is not None ):
+            for tool_guid in tool_panel_section_mapping:
+                if tool_panel_section_mapping[ tool_guid ][ 'action' ] == 'create':
+                    new_tool_panel_section_name = tool_panel_section_mapping[ tool_guid ][ 'tool_panel_section' ]
+                    log.debug( 'Creating tool panel section "%s" for tool %s' % ( new_tool_panel_section_name, tool_guid ) )
+                    self.tpm.handle_tool_panel_section( self.app.toolbox, None, tool_panel_section_mapping[ tool_guid ][ 'tool_panel_section' ] )
         encoded_repository_ids = [ self.app.security.encode_id( tsr.id ) for tsr in created_or_updated_tool_shed_repositories ]
         new_kwd = dict( includes_tools=includes_tools,
                         includes_tools_for_display_in_tool_panel=includes_tools_for_display_in_tool_panel,
                         has_repository_dependencies=has_repository_dependencies,
                         install_repository_dependencies=install_repository_dependencies,
                         includes_tool_dependencies=includes_tool_dependencies,
+                        install_resolver_dependencies=install_resolver_dependencies,
                         install_tool_dependencies=install_tool_dependencies,
                         message=message,
                         repo_info_dicts=filtered_repo_info_dicts,
@@ -731,10 +727,12 @@ class InstallRepositoryManager( object ):
             raise exceptions.InternalServerError( "Tool shed response missing required parameter 'includes_tools_for_display_in_tool_panel'." )
         # Get the information about the Galaxy components (e.g., tool pane section, tool config file, etc) that will contain the repository information.
         install_repository_dependencies = install_options.get( 'install_repository_dependencies', False )
+        install_resolver_dependencies = install_options.get( 'install_resolver_dependencies', False)
         install_tool_dependencies = install_options.get( 'install_tool_dependencies', False )
         if install_tool_dependencies:
             self.__assert_can_install_dependencies()
         new_tool_panel_section_label = install_options.get( 'new_tool_panel_section_label', '' )
+        tool_panel_section_mapping = install_options.get( 'tool_panel_section_mapping', {} )
         shed_tool_conf = install_options.get( 'shed_tool_conf', None )
         if shed_tool_conf:
             # Get the tool_path setting.
@@ -753,6 +751,7 @@ class InstallRepositoryManager( object ):
         # for each repository being installed.
         installation_dict = dict( install_repository_dependencies=install_repository_dependencies,
                                   new_tool_panel_section_label=new_tool_panel_section_label,
+                                  tool_panel_section_mapping=tool_panel_section_mapping,
                                   no_changes_checked=False,
                                   repo_info_dicts=repo_info_dicts,
                                   tool_panel_section_id=tool_panel_section_id,
@@ -770,6 +769,7 @@ class InstallRepositoryManager( object ):
                                       includes_tools=includes_tools,
                                       includes_tools_for_display_in_tool_panel=includes_tools_for_display_in_tool_panel,
                                       install_repository_dependencies=install_repository_dependencies,
+                                      install_resolver_dependencies=install_resolver_dependencies,
                                       install_tool_dependencies=install_tool_dependencies,
                                       message='',
                                       new_tool_panel_section_label=new_tool_panel_section_label,
@@ -777,6 +777,7 @@ class InstallRepositoryManager( object ):
                                       status='done',
                                       tool_panel_section_id=tool_panel_section_id,
                                       tool_panel_section_keys=tool_panel_section_keys,
+                                      tool_panel_section_mapping=tool_panel_section_mapping,
                                       tool_path=tool_path,
                                       tool_shed_url=tool_shed_url )
             # Prepare the repositories for installation.  Even though this
@@ -798,7 +799,9 @@ class InstallRepositoryManager( object ):
                 tool_path=tool_path,
                 tool_panel_section_keys=tool_panel_section_keys,
                 repo_info_dicts=filtered_repo_info_dicts,
+                install_resolver_dependencies=install_resolver_dependencies,
                 install_tool_dependencies=install_tool_dependencies,
+                tool_panel_section_mapping=tool_panel_section_mapping,
             )
             return self.install_repositories(tsr_ids, decoded_kwd, reinstalling=False)
 
@@ -806,7 +809,9 @@ class InstallRepositoryManager( object ):
         shed_tool_conf = decoded_kwd.get( 'shed_tool_conf', '' )
         tool_path = decoded_kwd[ 'tool_path' ]
         tool_panel_section_keys = util.listify( decoded_kwd[ 'tool_panel_section_keys' ] )
+        tool_panel_section_mapping = decoded_kwd.get( 'tool_panel_section_mapping', {} )
         repo_info_dicts = util.listify( decoded_kwd[ 'repo_info_dicts' ] )
+        install_resolver_dependencies = decoded_kwd['install_resolver_dependencies']
         install_tool_dependencies = decoded_kwd['install_tool_dependencies']
         filtered_repo_info_dicts = []
         filtered_tool_panel_section_keys = []
@@ -834,23 +839,26 @@ class InstallRepositoryManager( object ):
 
         installed_tool_shed_repositories = []
         if repositories_for_installation:
-            for index, tool_shed_repository in enumerate( repositories_for_installation ):
-                repo_info_dict = filtered_repo_info_dicts[ index ]
-                tool_panel_section_key = filtered_tool_panel_section_keys[ index ]
+            for tool_shed_repository, repo_info_dict, tool_panel_section_key in zip( repositories_for_installation,
+                                                                                     filtered_repo_info_dicts,
+                                                                                     filtered_tool_panel_section_keys ):
                 self.install_tool_shed_repository( tool_shed_repository,
                                                    repo_info_dict=repo_info_dict,
                                                    tool_panel_section_key=tool_panel_section_key,
                                                    shed_tool_conf=shed_tool_conf,
                                                    tool_path=tool_path,
+                                                   install_resolver_dependencies=install_resolver_dependencies,
                                                    install_tool_dependencies=install_tool_dependencies,
-                                                   reinstalling=reinstalling )
+                                                   reinstalling=reinstalling,
+                                                   tool_panel_section_mapping=tool_panel_section_mapping )
                 installed_tool_shed_repositories.append( tool_shed_repository )
         else:
             raise RepositoriesInstalledException()
         return installed_tool_shed_repositories
 
     def install_tool_shed_repository( self, tool_shed_repository, repo_info_dict, tool_panel_section_key, shed_tool_conf, tool_path,
-                                      install_tool_dependencies, reinstalling=False ):
+                                      install_resolver_dependencies, install_tool_dependencies, reinstalling=False, tool_panel_section_mapping={} ):
+        self.app.install_model.context.flush()
         if tool_panel_section_key:
             _, tool_section = self.app.toolbox.get_section( tool_panel_section_key )
             if tool_section is None:
@@ -858,15 +866,15 @@ class InstallRepositoryManager( object ):
                            str( tool_panel_section_key ) )
         else:
             tool_section = None
-        if isinstance( repo_info_dict, basestring ):
+        if isinstance( repo_info_dict, string_types ):
             repo_info_dict = encoding_util.tool_shed_decode( repo_info_dict )
         # Clone each repository to the configured location.
         self.update_tool_shed_repository_status( tool_shed_repository,
                                                  self.install_model.ToolShedRepository.installation_status.CLONING )
         repo_info_tuple = repo_info_dict[ tool_shed_repository.name ]
         description, repository_clone_url, changeset_revision, ctx_rev, repository_owner, repository_dependencies, tool_dependencies = repo_info_tuple
-        relative_clone_dir = suc.generate_tool_shed_repository_install_dir( repository_clone_url,
-                                                                            tool_shed_repository.installed_changeset_revision )
+        relative_clone_dir = repository_util.generate_tool_shed_repository_install_dir( repository_clone_url,
+                                                                                        tool_shed_repository.installed_changeset_revision )
         relative_install_dir = os.path.join( relative_clone_dir, tool_shed_repository.name )
         install_dir = os.path.join( tool_path, relative_install_dir )
         cloned_ok, error_message = hg_util.clone_repository( repository_clone_url, os.path.abspath( install_dir ), ctx_rev )
@@ -893,7 +901,8 @@ class InstallRepositoryManager( object ):
                                                tool_section=tool_section,
                                                shed_tool_conf=shed_tool_conf,
                                                tool_versions_response=tool_versions_response,
-                                               reinstalling=reinstalling )
+                                               reinstalling=reinstalling,
+                                               tool_panel_section_mapping=tool_panel_section_mapping )
             self.install_model.context.refresh( tool_shed_repository )
             metadata = tool_shed_repository.metadata
             if 'tools' in metadata:
@@ -906,6 +915,9 @@ class InstallRepositoryManager( object ):
                     error_message += "Version information for the tools included in the <b>%s</b> repository is missing.  " % tool_shed_repository.name
                     error_message += "Reset all of this repository's metadata in the tool shed, then set the installed tool versions "
                     error_message += "from the installed repository's <b>Repository Actions</b> menu.  "
+                if install_resolver_dependencies:
+                    requirements = suc.get_unique_requirements_from_repository(tool_shed_repository)
+                    [self._view.install_dependency(id=None, **req) for req in requirements]
             if install_tool_dependencies and tool_shed_repository.tool_dependencies and 'tool_dependencies' in metadata:
                 work_dir = tempfile.mkdtemp( prefix="tmp-toolshed-itsr" )
                 # Install tool dependencies.
@@ -927,13 +939,13 @@ class InstallRepositoryManager( object ):
                 self.app.installed_repository_manager.handle_repository_install( tool_shed_repository )
         else:
             # An error occurred while cloning the repository, so reset everything necessary to enable another attempt.
-            suc.set_repository_attributes( self.app,
-                                           tool_shed_repository,
-                                           status=self.install_model.ToolShedRepository.installation_status.ERROR,
-                                           error_message=error_message,
-                                           deleted=False,
-                                           uninstalled=False,
-                                           remove_from_disk=True )
+            repository_util.set_repository_attributes( self.app,
+                                                       tool_shed_repository,
+                                                       status=self.install_model.ToolShedRepository.installation_status.ERROR,
+                                                       error_message=error_message,
+                                                       deleted=False,
+                                                       uninstalled=False,
+                                                       remove_from_disk=True )
 
     def order_components_for_installation( self, tsr_ids, repo_info_dicts, tool_panel_section_keys ):
         """
@@ -952,9 +964,9 @@ class InstallRepositoryManager( object ):
         # Create a dictionary whose keys are the received tsr_ids and whose values are a list of
         # tsr_ids, each of which is contained in the received list of tsr_ids and whose associated
         # repository must be installed prior to the repository associated with the tsr_id key.
-        prior_install_required_dict = suc.get_prior_import_or_install_required_dict( self.app,
-                                                                                     tsr_ids,
-                                                                                     repo_info_dicts )
+        prior_install_required_dict = repository_util.get_prior_import_or_install_required_dict( self.app,
+                                                                                                 tsr_ids,
+                                                                                                 repo_info_dicts )
         processed_tsr_ids = []
         while len( processed_tsr_ids ) != len( prior_install_required_dict.keys() ):
             tsr_id = suc.get_next_prior_import_or_install_required_dict_entry( prior_install_required_dict,
@@ -1016,12 +1028,12 @@ def fetch_tool_versions( app, tool_shed_repository ):
     failed_to_fetch = False
     try:
         tool_shed_url = common_util.get_tool_shed_url_from_tool_shed_registry( app, str( tool_shed_repository.tool_shed ) )
-        params = '?name=%s&owner=%s&changeset_revision=%s' % ( str( tool_shed_repository.name ),
-                                                               str( tool_shed_repository.owner ),
-                                                               str( tool_shed_repository.changeset_revision ) )
-        url = common_util.url_join( tool_shed_url,
-                                    '/repository/get_tool_versions%s' % params )
-        text = common_util.tool_shed_get( app, tool_shed_url, url )
+        params = dict( name=str( tool_shed_repository.name ),
+                       owner=str( tool_shed_repository.owner ),
+                       changeset_revision=str( tool_shed_repository.changeset_revision ) )
+        pathspec = [ 'repository', 'get_tool_versions' ]
+        url = util.build_url( tool_shed_url, pathspec=pathspec, params=params )
+        text = util.url_get( tool_shed_url, password_mgr=app.tool_shed_registry.url_auth( tool_shed_url ), pathspec=pathspec, params=params )
         if text:
             return json.loads( text )
         else:

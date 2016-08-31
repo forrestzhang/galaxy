@@ -3,11 +3,13 @@ This migration script creates the new history_user_share_association table, and 
 a new boolean type column to the history table.  This provides support for sharing
 histories in the same way that workflows are shared.
 """
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
-import sys, logging
+from __future__ import print_function
+
+import logging
+import sys
+
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, MetaData, Table
+from sqlalchemy.exc import NoSuchTableError
 
 log = logging.getLogger( __name__ )
 log.setLevel(logging.DEBUG)
@@ -19,18 +21,19 @@ log.addHandler( handler )
 
 metadata = MetaData()
 
+
 def display_migration_details():
-    print "========================================"
-    print "This migration script creates the new history_user_share_association table, and adds"
-    print "a new boolean type column to the history table.  This provides support for sharing"
-    print "histories in the same way that workflows are shared."
-    print "========================================"
+    print("========================================")
+    print("This migration script creates the new history_user_share_association table, and adds")
+    print("a new boolean type column to the history table.  This provides support for sharing")
+    print("histories in the same way that workflows are shared.")
+    print("========================================")
 
 HistoryUserShareAssociation_table = Table( "history_user_share_association", metadata,
-    Column( "id", Integer, primary_key=True ),
-    Column( "history_id", Integer, ForeignKey( "history.id" ), index=True ),
-    Column( "user_id", Integer, ForeignKey( "galaxy_user.id" ), index=True )
-    )
+                                           Column( "id", Integer, primary_key=True ),
+                                           Column( "history_id", Integer, ForeignKey( "history.id" ), index=True ),
+                                           Column( "user_id", Integer, ForeignKey( "galaxy_user.id" ), index=True ) )
+
 
 def upgrade(migrate_engine):
     metadata.bind = migrate_engine
@@ -40,7 +43,7 @@ def upgrade(migrate_engine):
     # Create the history_user_share_association table
     try:
         HistoryUserShareAssociation_table.create()
-    except Exception, e:
+    except Exception as e:
         log.debug( "Creating history_user_share_association table failed: %s" % str( e ) )
     # Add 1 column to the history table
     try:
@@ -53,8 +56,9 @@ def upgrade(migrate_engine):
             col = Column( 'importable', Boolean, index=True, default=False )
             col.create( History_table, index_name='ix_history_importable')
             assert col is History_table.c.importable
-        except Exception, e:
+        except Exception as e:
             log.debug( "Adding column 'importable' to history table failed: %s" % ( str( e ) ) )
+
 
 def downgrade(migrate_engine):
     metadata.bind = migrate_engine
@@ -70,10 +74,10 @@ def downgrade(migrate_engine):
         try:
             col = History_table.c.importable
             col.drop()
-        except Exception, e:
+        except Exception as e:
             log.debug( "Dropping column 'importable' from history table failed: %s" % ( str( e ) ) )
     # Drop the history_user_share_association table
     try:
         HistoryUserShareAssociation_table.drop()
-    except Exception, e:
+    except Exception as e:
         log.debug( "Dropping history_user_share_association table failed: %s" % str( e ) )

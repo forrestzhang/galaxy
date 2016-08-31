@@ -1,12 +1,11 @@
+from __future__ import print_function
 from collections import namedtuple
 import functools
 from json import dumps, loads
 import operator
 
 from .helpers import skip_without_tool
-from .helpers import wait_on_state
 from .test_workflows import BaseWorkflowsApiTestCase
-import yaml
 
 
 class WorkflowExtractionApiTestCase( BaseWorkflowsApiTestCase ):
@@ -20,12 +19,12 @@ class WorkflowExtractionApiTestCase( BaseWorkflowsApiTestCase ):
         # Run the simple test workflow and extract it back out from history
         cat1_job_id = self.__setup_and_run_cat1_workflow( history_id=self.history_id )
         contents = self._history_contents()
-        input_hids = map( lambda c: c[ "hid" ], contents[ 0:2 ] )
+        input_hids = [c[ "hid" ] for c in contents[ 0:2 ]]
         downloaded_workflow = self._extract_and_download_workflow(
             dataset_ids=input_hids,
             job_ids=[ cat1_job_id ],
         )
-        self.assertEquals( downloaded_workflow[ "name" ], "test import from history" )
+        self.assertEqual( downloaded_workflow[ "name" ], "test import from history" )
         self.__assert_looks_like_cat1_example_workflow( downloaded_workflow )
 
     def test_extract_with_copied_inputs( self ):
@@ -44,7 +43,7 @@ class WorkflowExtractionApiTestCase( BaseWorkflowsApiTestCase ):
         for old_dataset in old_contents:
             self.__copy_content_to_history( self.history_id, old_dataset )
         new_contents = self._history_contents()
-        input_hids = map( lambda c: c[ "hid" ], new_contents[ (offset + 0):(offset + 2) ] )
+        input_hids = [c[ "hid" ] for c in new_contents[ (offset + 0):(offset + 2) ]]
         cat1_job_id = self.__job_id( self.history_id, new_contents[ (offset + 2) ][ "id" ] )
         downloaded_workflow = self._extract_and_download_workflow(
             dataset_ids=input_hids,
@@ -115,6 +114,7 @@ class WorkflowExtractionApiTestCase( BaseWorkflowsApiTestCase ):
     @skip_without_tool( "collection_paired_test" )
     def test_extract_workflows_with_dataset_collections( self ):
         jobs_summary = self._run_jobs("""
+class: GalaxyWorkflow
 steps:
   - label: text_input1
     type: input_collection
@@ -142,10 +142,12 @@ test_data:
 
         collection_step = self._get_steps_of_type( downloaded_workflow, "data_collection_input", expected_len=1 )[ 0 ]
         collection_step_state = loads( collection_step[ "tool_state" ] )
-        self.assertEquals( collection_step_state[ "collection_type" ], u"paired" )
+        self.assertEqual( collection_step_state[ "collection_type" ], "paired" )
 
+    @skip_without_tool( "cat_collection" )
     def test_subcollection_mapping( self ):
         jobs_summary = self._run_jobs("""
+class: GalaxyWorkflow
 steps:
   - label: text_input1
     type: input_collection
@@ -168,7 +170,7 @@ test_data:
             dataset_collection_ids=[ jobs_summary.inputs["text_input1"]["hid"] ],
             job_ids=[ job1_id, job2_id ],
         )
-        print jobs_summary.inputs["text_input1"]
+        print(jobs_summary.inputs["text_input1"])
         self.__check_workflow(
             downloaded_workflow,
             step_count=3,
@@ -180,10 +182,12 @@ test_data:
 
         collection_step = self._get_steps_of_type( downloaded_workflow, "data_collection_input", expected_len=1 )[ 0 ]
         collection_step_state = loads( collection_step[ "tool_state" ] )
-        self.assertEquals( collection_step_state[ "collection_type" ], u"list:paired" )
+        self.assertEqual( collection_step_state[ "collection_type" ], "list:paired" )
 
+    @skip_without_tool( "collection_split_on_column" )
     def test_extract_workflow_with_output_collections( self ):
         jobs_summary = self._run_jobs("""
+class: GalaxyWorkflow
 steps:
   - label: text_input1
     type: input
@@ -211,7 +215,7 @@ test_data:
   text_input2: "samp1\t30.0\nsamp2\t40.0\n"
 """)
         tool_ids = [ "cat1", "collection_split_on_column", "cat_list" ]
-        job_ids = map( functools.partial(self._job_id_for_tool, jobs_summary.jobs ), tool_ids )
+        job_ids = list(map( functools.partial(self._job_id_for_tool, jobs_summary.jobs ), tool_ids ))
         downloaded_workflow = self._extract_and_download_workflow(
             dataset_ids=[ "1", "2" ],
             job_ids=job_ids,
@@ -225,8 +229,10 @@ test_data:
             tool_ids=tool_ids,
         )
 
+    @skip_without_tool( "collection_creates_pair" )
     def test_extract_with_mapped_output_collections( self ):
         jobs_summary = self._run_jobs("""
+class: GalaxyWorkflow
 steps:
   - label: text_input1
     type: input_collection
@@ -259,7 +265,7 @@ test_data:
         content: "samp1\t30.0\nsamp2\t40.0\n"
 """)
         tool_ids = [ "cat1", "collection_creates_pair", "cat_collection", "cat_list" ]
-        job_ids = map( functools.partial(self._job_id_for_tool, jobs_summary.jobs ), tool_ids )
+        job_ids = list(map( functools.partial(self._job_id_for_tool, jobs_summary.jobs ), tool_ids ))
         downloaded_workflow = self._extract_and_download_workflow(
             dataset_collection_ids=[ "3" ],
             job_ids=job_ids,
@@ -277,7 +283,7 @@ test_data:
         return self._job_for_tool( jobs, tool_id )[ "id" ]
 
     def _job_for_tool( self, jobs, tool_id ):
-        tool_jobs = filter( lambda j: j["tool_id"] == tool_id, jobs )
+        tool_jobs = [j for j in jobs if j["tool_id"] == tool_id]
         if not tool_jobs:
             assert False, "Failed to find job for tool %s" % tool_id
         # if len( tool_jobs ) > 1:
@@ -325,8 +331,8 @@ test_data:
         input1 = tool_step[ "input_connections" ][ "input1" ]
         input2 = tool_step[ "input_connections" ][ "queries_0|input2" ]
 
-        self.assertEquals( input_steps[ 0 ][ "id" ], input1[ "id" ] )
-        self.assertEquals( input_steps[ 1 ][ "id" ], input2[ "id" ] )
+        self.assertEqual( input_steps[ 0 ][ "id" ], input1[ "id" ] )
+        self.assertEqual( input_steps[ 1 ][ "id" ], input2[ "id" ] )
 
     def _history_contents( self, history_id=None ):
         if history_id is None:
@@ -356,14 +362,14 @@ test_data:
         run_workflow_response = self._post( "workflows", data=workflow_request )
         self._assert_status_code_is( run_workflow_response, 200 )
 
-        self.dataset_populator.wait_for_history( history_id, assert_ok=True, timeout=10 )
+        self.dataset_populator.wait_for_history( history_id, assert_ok=True )
         return self.__cat_job_id( history_id )
 
     def _assert_first_step_is_paired_input( self, downloaded_workflow ):
         collection_steps = self._get_steps_of_type( downloaded_workflow, "data_collection_input", expected_len=1 )
         collection_step = collection_steps[ 0 ]
         collection_step_state = loads( collection_step[ "tool_state" ] )
-        self.assertEquals( collection_step_state[ "collection_type" ], u"paired" )
+        self.assertEqual( collection_step_state[ "collection_type" ], "paired" )
         collect_step_idx = collection_step[ "id" ]
         return collect_step_idx
 

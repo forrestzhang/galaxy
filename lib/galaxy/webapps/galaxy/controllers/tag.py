@@ -3,14 +3,16 @@ Tags Controller: handles tagging/untagging of entities
 and provides autocomplete support.
 """
 
-from galaxy import web
-from galaxy.web.base.controller import BaseUIController, UsesTagsMixin
-
+from six import text_type
 from sqlalchemy.sql import select
 from sqlalchemy.sql.expression import and_, func
 
+from galaxy import web
+from galaxy.web.base.controller import BaseUIController, UsesTagsMixin
+
 import logging
 log = logging.getLogger( __name__ )
+
 
 class TagsController ( BaseUIController, UsesTagsMixin ):
 
@@ -46,7 +48,7 @@ class TagsController ( BaseUIController, UsesTagsMixin ):
         trans.sa_session.flush()
         # Log.
         params = dict( item_id=item.id, item_class=item_class, tag=new_tag )
-        trans.log_action( user, unicode( "tag" ), context, params )
+        trans.log_action( user, text_type( "tag" ), context, params )
 
     @web.expose
     @web.require_login( "remove tag from an item" )
@@ -61,7 +63,7 @@ class TagsController ( BaseUIController, UsesTagsMixin ):
         trans.sa_session.flush()
         # Log.
         params = dict( item_id=item.id, item_class=item_class, tag=tag_name )
-        trans.log_action( user, unicode( "untag" ), context, params )
+        trans.log_action( user, text_type( "untag" ), context, params )
 
     # Retag an item. All previous tags are deleted and new tags are applied.
     @web.expose
@@ -126,9 +128,9 @@ class TagsController ( BaseUIController, UsesTagsMixin ):
         # Create and return autocomplete data.
         ac_data = "#Header|Your Tags\n"
         for row in result_set:
-            tag = self.get_tag_handler( trans ).get_tag_by_id( trans, row[0] )
+            tag = self.get_tag_handler( trans ).get_tag_by_id( row[0] )
             # Exclude tags that are already applied to the item.
-            if ( item is not None ) and ( self.get_tag_handler( trans ).item_has_tag( trans, trans.user, item, tag ) ):
+            if ( item is not None ) and ( self.get_tag_handler( trans ).item_has_tag( trans.user, item, tag ) ):
                 continue
             # Add tag to autocomplete data. Use the most frequent name that user
             # has employed for the tag.
@@ -144,7 +146,7 @@ class TagsController ( BaseUIController, UsesTagsMixin ):
         tag_name_and_value = q.split( ":" )
         tag_name = tag_name_and_value[0]
         tag_value = tag_name_and_value[1]
-        tag = self.get_tag_handler( trans ).get_tag_by_name( trans, tag_name )
+        tag = self.get_tag_handler( trans ).get_tag_by_name( tag_name )
         # Don't autocomplete if tag doesn't exist.
         if tag is None:
             return ""

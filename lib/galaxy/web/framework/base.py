@@ -7,14 +7,9 @@ import logging
 import os.path
 import socket
 import tarfile
+import tempfile
 import types
-
-import pkg_resources
-
-pkg_resources.require("Paste")
-pkg_resources.require("repoze.lru")  # used by Routes
-pkg_resources.require("Routes")
-pkg_resources.require("WebOb")
+import time
 
 import routes
 import webob
@@ -26,8 +21,12 @@ from paste.request import get_cookies
 from paste import httpexceptions
 from paste.response import HeaderDict
 
+from galaxy.util import smart_str
 
 log = logging.getLogger( __name__ )
+
+#: time of the most recent server startup
+server_starttime = int( time.time() )
 
 
 def __resource_with_deleted( self, member_name, collection_name, **kwargs ):
@@ -37,7 +36,7 @@ def __resource_with_deleted( self, member_name, collection_name, **kwargs ):
     elements in Galaxy's "deleted but not really deleted" fashion.
     """
     collection_path = kwargs.get( 'path_prefix', '' ) + '/' + collection_name + '/deleted'
-    member_path = collection_path + '/:id'
+    member_path = collection_path + '/{id}'
     self.connect( 'deleted_' + collection_name, collection_path, controller=collection_name, action='index', deleted=True, conditions=dict( method=['GET'] ) )
     self.connect( 'deleted_' + member_name, member_path, controller=collection_name, action='show', deleted=True, conditions=dict( method=['GET'] ) )
     self.connect( 'undelete_deleted_' + member_name, member_path + '/undelete', controller=collection_name, action='undelete',
@@ -98,6 +97,9 @@ class WebApplication( object ):
         method as keyword args.
         """
         self.mapper.connect( route, **kwargs )
+
+    def add_client_route( self, route ):
+        self.add_route(route, controller='root', action='client')
 
     def set_transaction_factory( self, transaction_factory ):
         """
@@ -182,6 +184,7 @@ class WebApplication( object ):
         # Is the method callable
         if not callable( method ):
             raise httpexceptions.HTTPNotFound( "Action not callable for " + path_info )
+        environ['controller_action_key'] = "%s.%s.%s" % ('api' if environ['is_api_request'] else 'web', controller_name, action or 'default')
         # Combine mapper args and query string / form args and call
         kwargs = trans.request.params.mixed()
         kwargs.update( map )
@@ -189,7 +192,7 @@ class WebApplication( object ):
         kwargs.pop( '_', None )
         try:
             body = method( trans, **kwargs )
-        except Exception, e:
+        except Exception as e:
             body = self.handle_controller_exception( e, trans, **kwargs )
             if not body:
                 raise
@@ -216,15 +219,12 @@ class WebApplication( object ):
         if isinstance( body, ( types.GeneratorType, list, tuple ) ):
             # Recursively stream the iterable
             return flatten( body )
-        elif isinstance( body, basestring ):
-            # Wrap the string so it can be iterated
-            return [ body ]
         elif body is None:
             # Returns an empty body
             return []
         else:
             # Worst case scenario
-            return [ str( body ) ]
+            return [ smart_str( body ) ]
 
     def handle_controller_exception( self, e, trans, **kwargs ):
         """
@@ -291,15 +291,13 @@ class DefaultWebTransaction( object ):
         else:
             return None
 
-# For request.params, override cgi.FieldStorage.make_file to create persistent
-# tempfiles.  Necessary for externalizing the upload tool.  It's a little hacky
-# but for performance reasons it's way better to use Paste's tempfile than to
-# create a new one and copy.
-import tempfile
-
 
 class FieldStorage( cgi.FieldStorage ):
     def make_file(self, binary=None):
+        # For request.params, override cgi.FieldStorage.make_file to create persistent
+        # tempfiles.  Necessary for externalizing the upload tool.  It's a little hacky
+        # but for performance reasons it's way better to use Paste's tempfile than to
+        # create a new one and copy.
         return tempfile.NamedTemporaryFile()
 
     def read_lines(self):
@@ -467,6 +465,6 @@ def flatten( seq ):
     for x in seq:
         if isinstance( x, ( types.GeneratorType, list, tuple ) ):
             for y in flatten( x ):
-                yield y
+                yield smart_str( y )
         else:
-            yield x
+            yield smart_str( x )

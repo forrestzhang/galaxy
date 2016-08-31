@@ -2,6 +2,7 @@
 import unittest
 import galaxy.model.mapping as mapping
 import uuid
+from six import text_type
 
 
 class MappingTests( unittest.TestCase ):
@@ -16,7 +17,7 @@ class MappingTests( unittest.TestCase ):
             annotated_association = annotation_class()
             annotated_association.annotation = "Test Annotation"
             annotated_association.user = u
-            for key, value in kwds.iteritems():
+            for key, value in kwds.items():
                 setattr(annotated_association, key, value)
             self.persist( annotated_association )
             self.expunge()
@@ -75,7 +76,7 @@ class MappingTests( unittest.TestCase ):
             rating_association = rating_class()
             rating_association.rating = 5
             rating_association.user = u
-            for key, value in kwds.iteritems():
+            for key, value in kwds.items():
                 setattr(rating_association, key, value)
             self.persist( rating_association )
             self.expunge()
@@ -118,8 +119,8 @@ class MappingTests( unittest.TestCase ):
     def test_display_name( self ):
 
         def assert_display_name_converts_to_unicode( item, name ):
-            assert not isinstance( item.name, unicode )
-            assert isinstance( item.get_display_name(), unicode )
+            assert not isinstance( item.name, text_type )
+            assert isinstance( item.get_display_name(), text_type )
             assert item.get_display_name() == name
 
         ldda = self.model.LibraryDatasetDatasetAssociation( name='ldda_name' )
@@ -140,8 +141,9 @@ class MappingTests( unittest.TestCase ):
         history = self.model.History(
             name=u'Hello₩◎ґʟⅾ'
         )
-        assert isinstance( history.name, unicode )
-        assert isinstance( history.get_display_name(), unicode )
+
+        assert isinstance( history.name, text_type )
+        assert isinstance( history.get_display_name(), text_type )
         assert history.get_display_name() == u'Hello₩◎ґʟⅾ'
 
     def test_tags( self ):
@@ -163,7 +165,6 @@ class MappingTests( unittest.TestCase ):
 
         sw = model.StoredWorkflow()
         sw.user = u
-        #self.persist( sw )
         tag_and_test( sw, model.StoredWorkflowTagAssociation, "tagged_workflows" )
 
         h = model.History( name="History for Tagging", user=u)
@@ -204,7 +205,7 @@ class MappingTests( unittest.TestCase ):
         self.persist( u, h1, d1, d2, c1, hc1, dce1, dce2 )
 
         loaded_dataset_collection = self.query( model.HistoryDatasetCollectionAssociation ).filter( model.HistoryDatasetCollectionAssociation.name == "HistoryCollectionTest1" ).first().collection
-        self.assertEquals(len(loaded_dataset_collection.elements), 2)
+        self.assertEqual(len(loaded_dataset_collection.elements), 2)
         assert loaded_dataset_collection.collection_type == "pair"
         assert loaded_dataset_collection[ "left" ] == dce1
         assert loaded_dataset_collection[ "right" ] == dce2
@@ -217,11 +218,9 @@ class MappingTests( unittest.TestCase ):
         l = model.Library( name="Library1", root_folder=lf )
         ld1 = model.LibraryDataset( )
         ld2 = model.LibraryDataset( )
-        #self.persist( u, l, lf, ld1, ld2, expunge=False )
 
         ldda1 = model.LibraryDatasetDatasetAssociation( extension="txt", library_dataset=ld1 )
         ldda2 = model.LibraryDatasetDatasetAssociation( extension="txt", library_dataset=ld1 )
-        #self.persist(  ld1, ld2, ldda1, ldda2, expunge=False )
 
         c1 = model.DatasetCollection(collection_type="pair")
         dce1 = model.DatasetCollectionElement(collection=c1, element=ldda1)
@@ -229,9 +228,20 @@ class MappingTests( unittest.TestCase ):
         self.persist( u, l, lf, ld1, ld2, c1, ldda1, ldda2, dce1, dce2 )
 
         # TODO:
-        #loaded_dataset_collection = self.query( model.DatasetCollection ).filter( model.DatasetCollection.name == "LibraryCollectionTest1" ).first()
-        #self.assertEquals(len(loaded_dataset_collection.datasets), 2)
-        #assert loaded_dataset_collection.collection_type == "pair"
+        # loaded_dataset_collection = self.query( model.DatasetCollection ).filter( model.DatasetCollection.name == "LibraryCollectionTest1" ).first()
+        # self.assertEquals(len(loaded_dataset_collection.datasets), 2)
+        # assert loaded_dataset_collection.collection_type == "pair"
+
+    def test_default_disk_usage( self ):
+        model = self.model
+
+        u = model.User( email="disk_default@test.com", password="password" )
+        self.persist( u )
+        u.adjust_total_disk_usage( 1 )
+        u_id = u.id
+        self.expunge()
+        user_reload = model.session.query( model.User ).get( u_id )
+        assert user_reload.disk_usage == 1
 
     def test_basic( self ):
         model = self.model
@@ -242,15 +252,15 @@ class MappingTests( unittest.TestCase ):
         u = model.User( email="james@foo.bar.baz", password="password" )
         # gs = model.GalaxySession()
         h1 = model.History( name="History 1", user=u)
-        #h1.queries.append( model.Query( "h1->q1" ) )
-        #h1.queries.append( model.Query( "h1->q2" ) )
+        # h1.queries.append( model.Query( "h1->q1" ) )
+        # h1.queries.append( model.Query( "h1->q2" ) )
         h2 = model.History( name=( "H" * 1024 ) )
         self.persist( u, h1, h2 )
-        #q1 = model.Query( "h2->q1" )
+        # q1 = model.Query( "h2->q1" )
         metadata = dict( chromCol=1, startCol=2, endCol=3 )
         d1 = model.HistoryDatasetAssociation( extension="interval", metadata=metadata, history=h2, create_dataset=True, sa_session=model.session )
-        #h2.queries.append( q1 )
-        #h2.queries.append( model.Query( "h2->q2" ) )
+        # h2.queries.append( q1 )
+        # h2.queries.append( model.Query( "h2->q2" ) )
         self.persist( d1 )
 
         # Check
@@ -270,8 +280,8 @@ class MappingTests( unittest.TestCase ):
         assert hist1.user is None
         assert hist1.datasets[0].metadata.chromCol == 1
         # The filename test has moved to objecstore
-        #id = hist1.datasets[0].id
-        #assert hist1.datasets[0].file_name == os.path.join( "/tmp", *directory_hash_id( id ) ) + ( "/dataset_%d.dat" % id )
+        # id = hist1.datasets[0].id
+        # assert hist1.datasets[0].file_name == os.path.join( "/tmp", *directory_hash_id( id ) ) + ( "/dataset_%d.dat" % id )
         # Do an update and check
         hist1.name = "History 2b"
         self.expunge()
@@ -348,7 +358,7 @@ class MappingTests( unittest.TestCase ):
             ).first()
             return list( map( lambda hda: hda.name, history.contents_iter( **kwds ) ) )
 
-        self.assertEquals(contents_iter_names(), [ "1", "2", "3", "4" ])
+        self.assertEqual(contents_iter_names(), [ "1", "2", "3", "4" ])
         assert contents_iter_names( deleted=False ) == [ "1", "2" ]
         assert contents_iter_names( visible=True ) == [ "1", "3" ]
         assert contents_iter_names( visible=False ) == [ "2", "4" ]
@@ -365,47 +375,80 @@ class MappingTests( unittest.TestCase ):
             email="testworkflows@bx.psu.edu",
             password="password"
         )
-        stored_workflow = model.StoredWorkflow()
-        stored_workflow.user = user
-        workflow = model.Workflow()
-        workflow_step = model.WorkflowStep()
-        workflow.steps = [ workflow_step ]
-        workflow.stored_workflow = stored_workflow
 
+        def workflow_from_steps(steps):
+            stored_workflow = model.StoredWorkflow()
+            stored_workflow.user = user
+            workflow = model.Workflow()
+            workflow.steps = steps
+            workflow.stored_workflow = stored_workflow
+            return workflow
+
+        child_workflow = workflow_from_steps([])
+        self.persist( child_workflow )
+
+        workflow_step_1 = model.WorkflowStep()
+        workflow_step_1.order_index = 0
+        workflow_step_1.type = "data_input"
+        workflow_step_2 = model.WorkflowStep()
+        workflow_step_2.order_index = 1
+        workflow_step_2.type = "subworkflow"
+        workflow_step_2.subworkflow = child_workflow
+
+        workflow = workflow_from_steps([workflow_step_1, workflow_step_2])
         self.persist( workflow )
-        assert workflow_step.id is not None
+
+        assert workflow_step_1.id is not None
+        h1 = model.History( name="WorkflowHistory1", user=user)
 
         invocation_uuid = uuid.uuid1()
 
         workflow_invocation = model.WorkflowInvocation()
         workflow_invocation.uuid = invocation_uuid
+        workflow_invocation.history = h1
 
         workflow_invocation_step1 = model.WorkflowInvocationStep()
         workflow_invocation_step1.workflow_invocation = workflow_invocation
-        workflow_invocation_step1.workflow_step = workflow_step
+        workflow_invocation_step1.workflow_step = workflow_step_1
+
+        subworkflow_invocation = model.WorkflowInvocation()
+        workflow_invocation.attach_subworkflow_invocation_for_step(workflow_step_2, subworkflow_invocation)
 
         workflow_invocation_step2 = model.WorkflowInvocationStep()
         workflow_invocation_step2.workflow_invocation = workflow_invocation
-        workflow_invocation_step2.workflow_step = workflow_step
+        workflow_invocation_step2.workflow_step = workflow_step_2
 
         workflow_invocation.workflow = workflow
 
-        h1 = model.History( name="WorkflowHistory1", user=user)
         d1 = self.new_hda( h1, name="1" )
         workflow_request_dataset = model.WorkflowRequestToInputDatasetAssociation()
         workflow_request_dataset.workflow_invocation = workflow_invocation
-        workflow_request_dataset.workflow_step = workflow_step
+        workflow_request_dataset.workflow_step = workflow_step_1
         workflow_request_dataset.dataset = d1
         self.persist( workflow_invocation )
         assert workflow_request_dataset is not None
         assert workflow_invocation.id is not None
 
+        history_id = h1.id
         self.expunge()
 
         loaded_invocation = self.query( model.WorkflowInvocation ).get( workflow_invocation.id )
         assert loaded_invocation.uuid == invocation_uuid, "%s != %s" % (loaded_invocation.uuid, invocation_uuid)
         assert loaded_invocation
+        assert loaded_invocation.history.id == history_id
+
+        step_1, step_2 = loaded_invocation.workflow.steps
+
+        assert not step_1.subworkflow
+        assert step_2.subworkflow
         assert len( loaded_invocation.steps ) == 2
+
+        subworkflow_invocation_assoc = loaded_invocation.get_subworkflow_invocation_association_for_step(step_2)
+        assert subworkflow_invocation_assoc is not None
+        assert isinstance(subworkflow_invocation_assoc.subworkflow_invocation, model.WorkflowInvocation)
+        assert isinstance(subworkflow_invocation_assoc.parent_workflow_invocation, model.WorkflowInvocation)
+
+        assert subworkflow_invocation_assoc.subworkflow_invocation.history.id == history_id
 
     def new_hda( self, history, **kwds ):
         return history.add_dataset( self.model.HistoryDatasetAssociation( create_dataset=True, sa_session=self.model.session, **kwds ) )

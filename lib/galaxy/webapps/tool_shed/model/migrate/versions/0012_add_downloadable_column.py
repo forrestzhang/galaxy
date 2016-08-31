@@ -1,13 +1,11 @@
 """
 Migration script to add the downloadable column to the repository_metadata table.
 """
+import logging
+import sys
 
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
+from sqlalchemy import Boolean, Column, MetaData, Table
 
-import sys, logging
 log = logging.getLogger( __name__ )
 log.setLevel(logging.DEBUG)
 handler = logging.StreamHandler( sys.stdout )
@@ -17,6 +15,7 @@ handler.setFormatter( formatter )
 log.addHandler( handler )
 
 metadata = MetaData()
+
 
 def upgrade(migrate_engine):
     print __doc__
@@ -35,8 +34,9 @@ def upgrade(migrate_engine):
         elif migrate_engine.name in ['postgresql', 'postgres']:
             default_true = "true"
         migrate_engine.execute( "UPDATE repository_metadata SET downloadable=%s" % default_true )
-    except Exception, e:
+    except Exception as e:
         print "Adding downloadable column to the repository_metadata table failed: %s" % str( e )
+
 
 def downgrade(migrate_engine):
     metadata.bind = migrate_engine
@@ -45,5 +45,5 @@ def downgrade(migrate_engine):
     RepositoryMetadata_table = Table( "repository_metadata", metadata, autoload=True )
     try:
         RepositoryMetadata_table.c.downloadable.drop()
-    except Exception, e:
+    except Exception as e:
         print "Dropping column downloadable from the repository_metadata table failed: %s" % str( e )

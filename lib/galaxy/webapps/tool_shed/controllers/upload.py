@@ -7,7 +7,7 @@ import urllib
 
 from galaxy import util
 from galaxy import web
-from galaxy.datatypes import checkers
+from galaxy.util import checkers
 from galaxy.web.base.controller import BaseUIController
 from tool_shed.util.web_util import escape
 
@@ -20,12 +20,11 @@ from tool_shed.tools import data_table_manager
 from tool_shed.util import basic_util
 from tool_shed.util import commit_util
 from tool_shed.util import hg_util
+from tool_shed.util import repository_util
 from tool_shed.util import shed_util_common as suc
 from tool_shed.util import repository_content_util
 from tool_shed.util import xml_util
 
-from galaxy import eggs
-eggs.require( 'mercurial' )
 from mercurial import commands
 
 log = logging.getLogger( __name__ )
@@ -39,10 +38,8 @@ class UploadController( BaseUIController ):
         message = escape( kwd.get( 'message', '' ) )
         status = kwd.get( 'status', 'done' )
         commit_message = escape( kwd.get( 'commit_message', 'Uploaded'  ) )
-        category_ids = util.listify( kwd.get( 'category_id', '' ) )
-        categories = suc.get_categories( trans.app )
         repository_id = kwd.get( 'repository_id', '' )
-        repository = suc.get_repository_in_tool_shed( trans.app, repository_id )
+        repository = repository_util.get_repository_in_tool_shed( trans.app, repository_id )
         repo_dir = repository.repo_path( trans.app )
         repo = hg_util.get_repo_for_repository( trans.app, repository=None, repo_path=repo_dir, create=False )
         uncompress_file = util.string_as_bool( kwd.get( 'uncompress_file', 'true' ) )
@@ -69,7 +66,7 @@ class UploadController( BaseUIController ):
                 repo_url = repo_url.encode( 'ascii', 'replace' )
                 try:
                     commands.clone( hg_util.get_configured_ui(), repo_url, uploaded_directory )
-                except Exception, e:
+                except Exception as e:
                     message = 'Error uploading via mercurial clone: %s' % basic_util.to_html_string( str( e ) )
                     status = 'error'
                     basic_util.remove_dir( uploaded_directory )
@@ -78,7 +75,7 @@ class UploadController( BaseUIController ):
                 valid_url = True
                 try:
                     stream = urllib.urlopen( url )
-                except Exception, e:
+                except Exception as e:
                     valid_url = False
                     message = 'Error uploading file via http: %s' % str( e )
                     status = 'error'
@@ -123,7 +120,7 @@ class UploadController( BaseUIController ):
                             else:
                                 tar = tarfile.open( uploaded_file_name )
                             istar = True
-                        except tarfile.ReadError, e:
+                        except tarfile.ReadError as e:
                             tar = None
                             istar = False
                 else:
@@ -162,12 +159,12 @@ class UploadController( BaseUIController ):
                                                                          isgzip=isgzip,
                                                                          isbz2=isbz2 )
                     if repository.type == rt_util.REPOSITORY_SUITE_DEFINITION and \
-                        uploaded_file_filename != rt_util.REPOSITORY_DEPENDENCY_DEFINITION_FILENAME:
+                            uploaded_file_filename != rt_util.REPOSITORY_DEPENDENCY_DEFINITION_FILENAME:
                         ok = False
                         message = 'Repositories of type <b>Repository suite definition</b> can only contain a single file named '
                         message += '<b>repository_dependencies.xml</b>.'
                     elif repository.type == rt_util.TOOL_DEPENDENCY_DEFINITION and \
-                        uploaded_file_filename != rt_util.TOOL_DEPENDENCY_DEFINITION_FILENAME:
+                            uploaded_file_filename != rt_util.TOOL_DEPENDENCY_DEFINITION_FILENAME:
                         ok = False
                         message = 'Repositories of type <b>Tool dependency definition</b> can only contain a single file named '
                         message += '<b>tool_dependencies.xml</b>.'
@@ -330,7 +327,6 @@ class UploadController( BaseUIController ):
                     status = 'error'
                 # Reset the tool_data_tables by loading the empty tool_data_table_conf.xml file.
                 tdtm.reset_tool_data_tables()
-        selected_categories = [ trans.security.decode_id( id ) for id in category_ids ]
         return trans.fill_template( '/webapps/tool_shed/repository/upload.mako',
                                     repository=repository,
                                     changeset_revision=tip,
@@ -344,7 +340,6 @@ class UploadController( BaseUIController ):
     def upload_directory( self, trans, rdah, tdah, repository, uploaded_directory, upload_point, remove_repo_files_not_in_tar,
                           commit_message, new_repo_alert ):
         repo_dir = repository.repo_path( trans.app )
-        repo = hg_util.get_repo_for_repository( trans.app, repository=None, repo_path=repo_dir, create=False )
         undesirable_dirs_removed = 0
         undesirable_files_removed = 0
         if upload_point is not None:

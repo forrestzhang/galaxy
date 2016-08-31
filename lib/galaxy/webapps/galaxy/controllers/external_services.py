@@ -10,6 +10,7 @@ class_name_to_class = {}
 for model_class in [Sample]:
     class_name_to_class[ model_class.__name__ ] = model_class
 
+
 class ExternalServiceController( BaseUIController ):
     @web.expose
     @web.require_admin
@@ -23,4 +24,4 @@ class ExternalServiceController( BaseUIController ):
             results = populated_action.handle_results( trans )
             return results
         else:
-            raise 'unknown item class type'
+            raise Exception( 'unknown item class type' )

@@ -1,6 +1,6 @@
 <%inherit file="/base.mako"/>
 <%namespace file="/message.mako" import="render_msg" />
-<% from galaxy.util import nice_size %>
+<% from galaxy.util import nice_size, unicodify %>
 
 <%def name="title()">Data Manager: ${ data_manager.name | h } - ${ data_manager.description | h }</%def>
 
@@ -21,12 +21,12 @@
 <table class="tabletip">
     <thead>
         <tr><th colspan="2" style="font-size: 120%;">
-            Data Manager: <a href="${ h.url_for( controller='tool_runner', action='index', tool_id=data_manager.tool.id ) }">${ data_manager.name | h }</a> - ${ data_manager.description | h } <a class="icon-btn" href="${ h.url_for( controller="tool_runner", action="rerun", job_id=trans.security.encode_id( job.id ) ) }" title="Rerun" data-placement="bottom"><span class="fa fa-refresh"></span></a>
+            Data Manager: <a href="${ h.url_for( controller='root', tool_id=data_manager.tool.id ) }" target="_blank">${ data_manager.name | h }</a> - ${ data_manager.description | h } <a class="icon-btn" href="${ h.url_for( controller="tool_runner", action="rerun", job_id=trans.security.encode_id( job.id ) ) }" title="Rerun" data-placement="bottom"><span class="fa fa-refresh"></span></a>
         </th></tr>
     </thead>
     <tbody>
         <tr><td>Name:</td><td>${hda.name | h}</td></tr>
-        <tr><td>Created:</td><td>${hda.create_time.strftime(trans.app.config.pretty_datetime_format) | h}</td></tr>
+        <tr><td>Created:</td><td>${unicodify(hda.create_time.strftime(trans.app.config.pretty_datetime_format)) | h}</td></tr>
         <tr><td>Filesize:</td><td>${nice_size(hda.dataset.file_size) | h}</td></tr>
         <tr><td>Tool Exit Code:</td><td>${job.exit_code | h}</td></tr>
         <tr><td>Full Path:</td><td>${hda.file_name | h}</td></tr>

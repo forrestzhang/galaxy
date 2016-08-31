@@ -45,7 +45,6 @@ class TagAttributeHandler( object ):
         #     <package name="libgtextutils" version="0.6">
         #         <repository name="package_libgtextutils_0_6" owner="test" prior_installation_required="True" />
         #     </package>
-        from tool_shed.util import xml_util
         elem_altered = False
         new_elem = copy.deepcopy( elem )
         for sub_index, sub_elem in enumerate( elem ):
@@ -109,7 +108,7 @@ class TagAttributeHandler( object ):
                     elem_altered = True
                 new_elem[ sub_index ] = new_sub_elem
         return elem_altered, new_elem, message
-        
+
     def process_config( self, root, skip_actions_tags=True ):
         error_message = ''
         new_root = copy.deepcopy( root )

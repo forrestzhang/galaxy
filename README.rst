@@ -1,25 +1,28 @@
 .. figure:: https://wiki.galaxyproject.org/Images/GalaxyLogo?action=AttachFile&do=get&target=galaxy_project_logo.jpg
    :alt: Galaxy Logo
 
-The latest information about Galaxy is available via `http://galaxyproject.org/ <http://galaxyproject.org/>`__
+The latest information about Galaxy is available via `https://galaxyproject.org/ <https://galaxyproject.org/>`__
 
 .. image:: https://img.shields.io/badge/questions-galaxy%20biostar-blue.svg
     :target: https://biostar.usegalaxy.org
+    :alt: Ask a question
 
 .. image:: https://img.shields.io/badge/chat-irc.freenode.net%23galaxyproject-blue.svg
     :target: https://webchat.freenode.net/?channels=galaxyproject
+    :alt: Chat with us
 
-.. image:: https://readthedocs.org/projects/galaxy/badge/?version=master
-    :target: http://galaxy.readthedocs.org/en/master/
-    :alt: Documentation Status
+.. image:: https://img.shields.io/badge/docs-release-green.svg
+    :target: https://docs.galaxyproject.org/en/master/
+    :alt: Release Documentation
 
 .. image:: https://travis-ci.org/galaxyproject/galaxy.svg?branch=dev
     :target: https://travis-ci.org/galaxyproject/galaxy
+    :alt: Inspect the test results
 
 Galaxy Quickstart
 =================
 
-Galaxy requires Python 2.6 or 2.7. To check your python version, run:
+Galaxy requires Python 2.7 To check your python version, run:
 
 .. code:: console
 
@@ -49,44 +52,12 @@ Not all dependencies are included for the tools provided in the sample
 
 https://wiki.galaxyproject.org/Admin/Tools/ToolDependencies
 
-Issues
-======
+Issues and Galaxy Development
+=============================
 
-Issues can be submitted to trello via the `galaxyproject
-website <http://galaxyproject.org/trello/>`__ and viewed on the `Galaxy
-Trello Board <https://trello.com/b/75c1kASa/galaxy-development>`__.
+Please see `CONTRIBUTING.md <CONTRIBUTING.md>`_ .
 
+Roadmap
+=============================
 
-Galaxy Development
-==================
-
-Galaxy welcomes new development! There is extensive documentation on developing
-with Galaxy on the `wiki <https://wiki.galaxyproject.org/Develop>`__.
-
-Source Repository
------------------
-
-Galaxy development has moved to `Github
-<https://github.com/galaxyproject/galaxy>`__.
-
-**Developers** should develop against the ``dev`` branch in the Github
-repository.
-
-**Deployers** can continue to pull Galaxy changes from Bitbucket without
-interruption. Alternatively, deployers can track the ``master`` branch in
-Github.
-
-Syncing a Fork
---------------
-
-If you fork Galaxy to work on it, you may be interested in keeping your copy
-up to date with respect to the main repository. Github has `good documentation
-<https://help.github.com/articles/syncing-a-fork/>`__ on this.
-
-.. code:: console
-
-    $ git remote add upstream https://github.com/galaxyproject/galaxy
-    $ git fetch upstream
-    $ git checkout dev
-    $ git merge upstream/dev
-
+Interested in the next steps for Galaxy? Take a look here: https://github.com/galaxyproject/galaxy/issues/1928

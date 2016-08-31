@@ -4,11 +4,9 @@ API operations for Workflows
 
 from __future__ import absolute_import
 
-import uuid
 import logging
-import copy
 import urllib
-from sqlalchemy import desc, or_, and_
+from sqlalchemy import desc, false, or_, true
 from galaxy import exceptions, util
 from galaxy.model.item_attrs import UsesAnnotations
 from galaxy.managers import histories
@@ -17,9 +15,12 @@ from galaxy.web import _future_expose_api as expose_api
 from galaxy.web.base.controller import BaseAPIController, url_for, UsesStoredWorkflowMixin
 from galaxy.web.base.controller import SharableMixin
 from galaxy.workflow.extract import extract_workflow
-from galaxy.workflow.run import invoke, queue_invoke
+from galaxy.workflow.run import invoke, queue_invoke, WorkflowRunConfig
 from galaxy.workflow.run_request import build_workflow_run_config
-from galaxy.workflow.modules import module_factory
+from galaxy.workflow.modules import module_factory, WorkflowModuleInjector
+from galaxy.tools.parameters.basic import workflow_building_modes
+from galaxy.tools.parameters.meta import expand_workflow_inputs
+
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
         super( WorkflowsAPIController, self ).__init__( app )
         self.history_manager = histories.HistoryManager( app )
         self.workflow_manager = workflows.WorkflowsManager( app )
-        self.workflow_contents_manager = workflows.WorkflowContentsManager()
+        self.workflow_contents_manager = workflows.WorkflowContentsManager( app )
 
     @expose_api
     def index(self, trans, **kwd):
@@ -46,9 +47,9 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
         rval = []
         filter1 = ( trans.app.model.StoredWorkflow.user == trans.user )
         if show_published:
-            filter1 = or_( filter1, ( trans.app.model.StoredWorkflow.published == True ) ) #noqa -- sqlalchemy comparison
+            filter1 = or_( filter1, ( trans.app.model.StoredWorkflow.published == true() ) )
         for wf in trans.sa_session.query( trans.app.model.StoredWorkflow ).filter(
-                filter1, trans.app.model.StoredWorkflow.table.c.deleted == False ).order_by( #noqa -- sqlalchemy comparison
+                filter1, trans.app.model.StoredWorkflow.table.c.deleted == false() ).order_by(
                 desc( trans.app.model.StoredWorkflow.table.c.update_time ) ).all():
             item = wf.to_dict( value_mapper={ 'id': trans.security.encode_id } )
             encoded_id = trans.security.encode_id(wf.id)
@@ -57,7 +58,7 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
             rval.append(item)
         for wf_sa in trans.sa_session.query( trans.app.model.StoredWorkflowUserShareAssociation ).filter_by(
                 user=trans.user ).join( 'stored_workflow' ).filter(
-                trans.app.model.StoredWorkflow.deleted == False ).order_by( #noqa -- sqlalchemy comparison
+                trans.app.model.StoredWorkflow.deleted == false() ).order_by(
                 desc( trans.app.model.StoredWorkflow.update_time ) ).all():
             item = wf_sa.stored_workflow.to_dict( value_mapper={ 'id': trans.security.encode_id } )
             encoded_id = trans.security.encode_id(wf_sa.stored_workflow.id)
@@ -78,7 +79,73 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
             if trans.sa_session.query(trans.app.model.StoredWorkflowUserShareAssociation).filter_by(user=trans.user, stored_workflow=stored_workflow).count() == 0:
                 message = "Workflow is neither importable, nor owned by or shared with current user"
                 raise exceptions.ItemAccessibilityException( message )
-        return self.workflow_contents_manager.workflow_to_dict( trans, stored_workflow, style="instance" )
+        if kwd.get("legacy", False):
+            style = "legacy"
+        else:
+            style = "instance"
+        return self.workflow_contents_manager.workflow_to_dict( trans, stored_workflow, style=style )
+
+    @expose_api
+    def run( self, trans, workflow_id, payload, **kwd ):
+        """
+        POST /api_internal/workflows/{encoded_workflow_id}/run
+
+        Run a workflow with a dictionary of prefixed_name/value pairs e.g.
+            payload = { inputs: { step_0: { parameter_0|parameter_1 : value_0, ... }, ... } }
+        """
+        workflow = self.__get_stored_accessible_workflow( trans, workflow_id ).latest_workflow
+        trans.workflow_building_mode = workflow_building_modes.USE_HISTORY
+        module_injector = WorkflowModuleInjector( trans )
+        params, param_keys = expand_workflow_inputs( payload.get( 'inputs', [] ) )
+        errors = {}
+        for workflow_args in params:
+            for step in workflow.steps:
+                step_args = workflow_args.get( str( step.id ), {} )
+                step_errors = module_injector.inject( step, step_args )
+                if step_errors:
+                    errors[ step.id ] = step_errors
+        if errors:
+            log.exception( errors )
+            raise exceptions.MessageException( err_data=errors )
+        invocations = []
+        for index, workflow_args in enumerate( params ):
+            for step in workflow.steps:
+                step_args = workflow_args.get( str( step.id ), {} )
+                module_injector.inject( step, step_args )
+            new_history = None
+            if 'new_history_name' in payload:
+                if payload[ 'new_history_name' ]:
+                    nh_name = payload[ 'new_history_name' ]
+                else:
+                    nh_name = 'History from %s workflow' % workflow.name
+                if index in param_keys:
+                    ids = param_keys[ index ]
+                    nids = len( ids )
+                    if nids == 1:
+                        nh_name = '%s on %s' % ( nh_name, ids[ 0 ] )
+                    elif nids > 1:
+                        nh_name = '%s on %s and %s' % ( nh_name, ', '.join( ids[ 0:-1 ] ), ids[ -1 ] )
+                new_history = trans.app.model.History( user=trans.user, name=nh_name )
+                new_history.copy_tags_from( trans.user, trans.history )
+                trans.sa_session.add( new_history )
+                target_history = new_history
+            elif 'history_id' in payload:
+                target_history = histories.HistoryManager( trans.app ).get_owned( trans.security.decode_id( payload.get( 'history_id' ), trans.user, current_history=trans.history ) )
+            else:
+                target_history = trans.history
+            run_config = WorkflowRunConfig(
+                target_history=target_history,
+                replacement_dict=payload.get( 'replacement_params', {} ),
+                copy_inputs_to_history=new_history is not None )
+            invocation = queue_invoke(
+                trans=trans,
+                workflow=workflow,
+                workflow_run_config=run_config,
+                populate_state=False )
+            invocations.append({ 'history'      : { 'id' : trans.app.security.encode_id( new_history.id ), 'name' : new_history.name } if new_history else None,
+                                 'scheduled'    : invocation.state == trans.app.model.WorkflowInvocation.states.SCHEDULED })
+            trans.sa_session.flush()
+        return invocations
 
     @expose_api
     def create(self, trans, payload, **kwd):
@@ -136,12 +203,12 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
             'from_history_id',
             'shared_workflow_id',
             'workflow',
-        ] ).intersection( payload )
-        if len( ways_to_create ) == 0:
+        ] )
+        if len( ways_to_create.intersection( payload ) ) == 0:
             message = "One parameter among - %s - must be specified" % ", ".join( ways_to_create )
             raise exceptions.RequestParameterMissingException( message )
 
-        if len( ways_to_create ) > 1:
+        if len( ways_to_create.intersection( payload ) ) > 1:
             message = "Only one parameter among - %s - must be specified" % ", ".join( ways_to_create )
             raise exceptions.RequestParameterInvalidException( message )
 
@@ -249,7 +316,7 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
 
         try:
             stored_workflow = trans.sa_session.query(self.app.model.StoredWorkflow).get(self.decode_id(workflow_id))
-        except Exception, e:
+        except Exception as e:
             trans.response.status = 400
             return ("Workflow with ID='%s' can not be found\n Exception: %s") % (workflow_id, str( e ))
 
@@ -300,8 +367,7 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
         """
         stored_workflow = self.__get_stored_workflow( trans, id )
         if 'workflow' in payload:
-            workflow_contents_manager = workflows.WorkflowContentsManager()
-            workflow, errors = workflow_contents_manager.update_workflow_from_dict(
+            workflow, errors = self.workflow_contents_manager.update_workflow_from_dict(
                 trans,
                 stored_workflow,
                 payload['workflow'],
@@ -312,21 +378,20 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
         return self.workflow_contents_manager.workflow_to_dict( trans, stored_workflow, style="instance" )
 
     @expose_api
-    def build_module( self, trans, payload={}):
+    def build_module( self, trans, payload={} ):
         """
         POST /api/workflows/build_module
         Builds module details including a tool model for the workflow editor.
         """
-        tool_id         = payload.get( 'tool_id', None )
-        tool_version    = payload.get( 'tool_version', None )
-        tool_inputs     = payload.get( 'inputs', {} )
-        annotation      = payload.get( 'annotation', tool_inputs.get('annotation', '') )
+        tool_id = payload.get( 'tool_id' )
+        tool_version = payload.get( 'tool_version' )
+        tool_inputs = payload.get( 'inputs', {} )
+        annotation = payload.get( 'annotation', tool_inputs.get( 'annotation', '' ) )
 
         # load tool
         tool = self._get_tool( tool_id, tool_version=tool_version, user=trans.user )
 
         # initialize module
-        trans.workflow_building_mode = True
         module = module_factory.from_dict( trans, {
             'type'          : 'tool',
             'tool_id'       : tool.id,
@@ -334,8 +399,8 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
         } )
 
         # create tool model and default tool state (if missing)
-        tool_model = module.tool.to_json(trans, tool_inputs, is_workflow=True)
-        module.state.inputs = copy.deepcopy(tool_model['state_inputs'])
+        tool_model = module.tool.to_json( trans, tool_inputs, workflow_building_mode=True )
+        module.update_state( tool_model[ 'state_inputs' ] )
         return {
             'tool_model'        : tool_model,
             'tool_state'        : module.get_state(),
@@ -571,33 +636,10 @@ class WorkflowsAPIController(BaseAPIController, UsesStoredWorkflowMixin, UsesAnn
         )
 
     def __get_stored_accessible_workflow( self, trans, workflow_id ):
-        stored_workflow = self.__get_stored_workflow( trans, workflow_id )
-
-        # check to see if user has permissions to selected workflow
-        if stored_workflow.user != trans.user and not trans.user_is_admin():
-            if trans.sa_session.query(trans.app.model.StoredWorkflowUserShareAssociation).filter_by(user=trans.user, stored_workflow=stored_workflow).count() == 0:
-                message = "Workflow is not owned by or shared with current user"
-                raise exceptions.ItemAccessibilityException( message )
-
-        return stored_workflow
+        return self.workflow_manager.get_stored_accessible_workflow( trans, workflow_id )
 
     def __get_stored_workflow( self, trans, workflow_id ):
-        if util.is_uuid(workflow_id):
-            # see if they have passed in the UUID for a workflow that is attached to a stored workflow
-            workflow_uuid = uuid.UUID(workflow_id)
-            stored_workflow = trans.sa_session.query(trans.app.model.StoredWorkflow).filter( and_(
-                trans.app.model.StoredWorkflow.latest_workflow_id == trans.app.model.Workflow.id,
-                trans.app.model.Workflow.uuid == workflow_uuid
-            )).first()
-            if stored_workflow is None:
-                raise exceptions.ObjectNotFound( "Workflow not found: %s" % workflow_id )
-        else:
-            workflow_id = self.decode_id( workflow_id )
-            query = trans.sa_session.query( trans.app.model.StoredWorkflow )
-            stored_workflow = query.get( workflow_id )
-        if stored_workflow is None:
-            raise exceptions.ObjectNotFound( "No such workflow found." )
-        return stored_workflow
+        return self.workflow_manager.get_stored_workflow( trans, workflow_id )
 
     def __encode_invocation( self, trans, invocation, view="element", step_details=False ):
         return self.encode_all_ids(

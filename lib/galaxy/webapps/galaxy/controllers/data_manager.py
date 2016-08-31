@@ -1,17 +1,16 @@
+import logging
+from json import loads
+
+import paste.httpexceptions
+from markupsafe import escape
+from six import string_types
+
 import galaxy.queue_worker
 from galaxy import web
-from galaxy.util.json import loads
 from galaxy.web.base.controller import BaseUIController
 
-import pkg_resources;
-pkg_resources.require( "Paste" )
-import paste.httpexceptions
-
-from galaxy.web.framework.helpers import escape
-
-#set up logger
-import logging
 log = logging.getLogger( __name__ )
+
 
 class DataManager( BaseUIController ):
 
@@ -49,11 +48,11 @@ class DataManager( BaseUIController ):
         try:
             job_id = trans.security.decode_id( job_id )
             job = trans.sa_session.query( trans.app.model.Job ).get( job_id )
-        except Exception, e:
+        except Exception as e:
             job = None
             log.error( "Bad job id (%s) passed to view_job: %s" % ( job_id, e ) )
         if not job:
-            return trans.response.send_redirect( web.url_for( controller="data_manager", action="index",message="Invalid job (%s) was requested" % job_id, status="error" ) )
+            return trans.response.send_redirect( web.url_for( controller="data_manager", action="index", message="Invalid job (%s) was requested" % job_id, status="error" ) )
         data_manager_id = job.data_manager_association.data_manager_id
         data_manager = trans.app.data_managers.get_manager( data_manager_id )
         hdas = [ assoc.dataset for assoc in job.get_output_datasets() ]
@@ -62,7 +61,7 @@ class DataManager( BaseUIController ):
         for hda in hdas:
             try:
                 data_manager_json = loads( open( hda.get_file_name() ).read() )
-            except Exception, e:
+            except Exception as e:
                 data_manager_json = {}
                 error_messages.append( escape( "Unable to obtain data_table info for hda (%s): %s" % ( hda.id, e ) ) )
             values = []
@@ -89,7 +88,7 @@ class DataManager( BaseUIController ):
     @web.expose
     @web.require_admin
     def reload_tool_data_tables( self, trans, table_name=None, **kwd ):
-        if table_name and isinstance( table_name, basestring ):
+        if table_name and isinstance( table_name, string_types ):
             table_name = table_name.split( "," )
         # Reload the tool data tables
         table_names = self.app.tool_data_tables.reload_tables( table_names=table_name )
@@ -107,7 +106,7 @@ class DataManager( BaseUIController ):
                                             message=message,
                                             status=status )
             else:
-                 message = "The data tables '%s' have been reloaded." % ', '.join( table_names )
+                message = "The data tables '%s' have been reloaded." % ', '.join( table_names )
         else:
             message = "No data tables have been reloaded."
             status = 'error'
@@ -117,4 +116,3 @@ class DataManager( BaseUIController ):
                                         message=message,
                                         status=status )
         return trans.response.send_redirect( redirect_url )
-

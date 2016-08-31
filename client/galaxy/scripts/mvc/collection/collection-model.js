@@ -3,6 +3,10 @@ define([
     "mvc/base-mvc",
     "utils/localization"
 ], function( DATASET_MODEL, BASE_MVC, _l ){
+
+'use strict';
+
+var logNamespace = 'collections';
 //==============================================================================
 /*
 Notes:
@@ -88,13 +92,16 @@ var DatasetCollectionElementMixin = {
 /** @class Concrete class of Generic DatasetCollectionElement */
 var DatasetCollectionElement = Backbone.Model
     .extend( BASE_MVC.LoggableMixin )
-    .extend( DatasetCollectionElementMixin );
+    .extend( DatasetCollectionElementMixin )
+    .extend({ _logNamespace : logNamespace });
 
 
 //==============================================================================
 /** @class Base/Abstract Backbone collection for Generic DCEs. */
 var DCECollection = Backbone.Collection.extend( BASE_MVC.LoggableMixin ).extend(
 /** @lends DCECollection.prototype */{
+    _logNamespace : logNamespace,
+
     model: DatasetCollectionElement,
 
     /** logger used to record this.log messages, commonly set to console */
@@ -126,6 +133,17 @@ var DatasetDCE = DATASET_MODEL.DatasetAssociation.extend( BASE_MVC.mixin( Datase
     /** logger used to record this.log messages, commonly set to console */
     //logger              : console,
 
+    /** url fn */
+    url : function(){
+        // won't always be an hda
+        if( !this.has( 'history_id' ) ){
+            console.warn( 'no endpoint for non-hdas within a collection yet' );
+            // (a little silly since this api endpoint *also* points at hdas)
+            return Galaxy.root + 'api/datasets';
+        }
+        return Galaxy.root + 'api/histories/' + this.get( 'history_id' ) + '/contents/' + this.get( 'id' );
+    },
+
     defaults : _.extend( {},
         DATASET_MODEL.DatasetAssociation.prototype.defaults,
         DatasetCollectionElementMixin.defaults
@@ -133,7 +151,7 @@ var DatasetDCE = DATASET_MODEL.DatasetAssociation.extend( BASE_MVC.mixin( Datase
 
     // because all objects have constructors (as this hashmap would even if this next line wasn't present)
     //  the constructor in hcontentMixin won't be attached by BASE_MVC.mixin to this model
-    //  - re-apply manually it now
+    //  - re-apply manually for now
     /** call the mixin constructor */
     constructor : function( attributes, options ){
         this.debug( '\t DatasetDCE.constructor:', attributes, options );
@@ -146,6 +164,12 @@ var DatasetDCE = DATASET_MODEL.DatasetAssociation.extend( BASE_MVC.mixin( Datase
     initialize : function( attributes, options ){
         this.debug( this + '(DatasetDCE).initialize:', attributes, options );
         DATASET_MODEL.DatasetAssociation.prototype.initialize.call( this, attributes, options );
+    },
+
+    /** Does this model already contain detailed data (as opposed to just summary level data)? */
+    hasDetails : function(){
+        // dataset collection api does return genome_build but doesn't return annotation
+        return _.has( this.attributes, 'annotation' );
     },
 
     /** String representation. */
@@ -192,7 +216,8 @@ var DatasetDCECollection = DCECollection.extend(
 var DatasetCollection = Backbone.Model
         .extend( BASE_MVC.LoggableMixin )
         .extend( BASE_MVC.SearchableModelMixin )
-.extend(/** @lends DatasetCollection.prototype */{
+        .extend(/** @lends DatasetCollection.prototype */{
+    _logNamespace : logNamespace,
 
     /** logger used to record this.log messages, commonly set to console */
     //logger              : console,
@@ -241,10 +266,12 @@ var DatasetCollection = Backbone.Model
         return json;
     },
 
-    /** is the collection done with updates and ready to be used? (finished running, etc.) */
+    /** Is this collection in a 'ready' state no processing (for the collection) is left
+     *  to do on the server.
+     */
     inReadyState : function(){
-//TODO: state currenly unimplemented for collections
-        return true;
+        var populated = this.get( 'populated' );
+        return ( this.isDeletedOrPurged() || populated );
     },
 
     //TODO:?? the following are the same interface as DatasetAssociation - can we combine?
@@ -478,9 +505,57 @@ var ListPairedDatasetCollection = DatasetCollection.extend(
 
 
 //==============================================================================
+/** @class Backbone model for a list dataset collection within a list:list dataset collection. */
+var NestedListDCDCE = ListDatasetCollection.extend( BASE_MVC.mixin( DatasetCollectionElementMixin,
+/** @lends NestedListDCDCE.prototype */{
+
+    /** This is both a collection and a collection element - call the constructor */
+    constructor : function( attributes, options ){
+        this.debug( '\t NestedListDCDCE.constructor:', attributes, options );
+        DatasetCollectionElementMixin.constructor.call( this, attributes, options );
+    },
+
+    /** String representation. */
+    toString : function(){
+        var objStr = ( this.object )?( '' + this.object ):( this.get( 'element_identifier' ) );
+        return ([ 'NestedListDCDCE(', objStr, ')' ].join( '' ));
+    }
+}));
+
+
+//==============================================================================
+/** @class Backbone collection containing list dataset collections. */
+var NestedListDCDCECollection = NestedDCDCECollection.extend({
+
+    /** We know this collection is composed of only nested pair collections */
+    model: NestedListDCDCE,
+
+    /** String representation. */
+    toString : function(){
+        return ([ 'NestedListDCDCECollection(', this.length, ')' ].join( '' ));
+    }
+});
+
+
+//==============================================================================
+/** @class Backbone Model for a DatasetCollection (list) that contains other lists. */
+var ListOfListsDatasetCollection = DatasetCollection.extend({
+
+    /** list:paired is the only collection that itself contains collections */
+    collectionClass : NestedListDCDCECollection,
+
+    /** String representation. */
+    toString : function(){
+        return ([ 'ListOfListsDatasetCollection(', this.get( 'name' ), ')' ].join( '' ));
+    }
+});
+
+
+//==============================================================================
     return {
-        ListDatasetCollection               : ListDatasetCollection,
-        PairDatasetCollection               : PairDatasetCollection,
-        ListPairedDatasetCollection         : ListPairedDatasetCollection
+        ListDatasetCollection       : ListDatasetCollection,
+        PairDatasetCollection       : PairDatasetCollection,
+        ListPairedDatasetCollection : ListPairedDatasetCollection,
+        ListOfListsDatasetCollection: ListOfListsDatasetCollection
     };
 });

@@ -1,29 +1,29 @@
 """
 Migration script to add 'info' column to the transfer_job table.
 """
-
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
+from __future__ import print_function
 
 import logging
-log = logging.getLogger( __name__ )
 
+from sqlalchemy import Column, MetaData, Table, TEXT
+
+log = logging.getLogger( __name__ )
 metadata = MetaData()
+
 
 def upgrade(migrate_engine):
     metadata.bind = migrate_engine
-    print __doc__
+    print(__doc__)
     metadata.reflect()
     try:
         TransferJob_table = Table( "transfer_job", metadata, autoload=True )
         c = Column( "info", TEXT )
         c.create( TransferJob_table )
         assert c is TransferJob_table.c.info
-    except Exception, e:
-        print "Adding info column to transfer_job table failed: %s" % str( e )
+    except Exception as e:
+        print("Adding info column to transfer_job table failed: %s" % str( e ))
         log.debug( "Adding info column to transfer_job table failed: %s" % str( e ) )
+
 
 def downgrade(migrate_engine):
     metadata.bind = migrate_engine
@@ -31,6 +31,6 @@ def downgrade(migrate_engine):
     try:
         TransferJob_table = Table( "transfer_job", metadata, autoload=True )
         TransferJob_table.c.info.drop()
-    except Exception, e:
-        print "Dropping info column from transfer_job table failed: %s" % str( e )
+    except Exception as e:
+        print("Dropping info column from transfer_job table failed: %s" % str( e ))
         log.debug( "Dropping info column from transfer_job table failed: %s" % str( e ) )

@@ -1,11 +1,14 @@
+import json
 import os
 import string
 import unittest
 
-from galaxy.tools import ToolBox
+from six import string_types
+
 from galaxy import model
 from galaxy.model import tool_shed_install
 from galaxy.model.tool_shed_install import mapping
+from galaxy.tools import ToolBox
 import tools_support
 
 import routes
@@ -117,10 +120,14 @@ class BaseToolBoxTestCase(  unittest.TestCase, tools_support.UsesApp, tools_supp
 </toolbox>"""
         self._add_config( template % (self.test_directory, CONFIG_TEST_TOOL_VERSION_1, CONFIG_TEST_TOOL_VERSION_2 ) )
 
-    def _add_config( self, xml, name="tool_conf.xml" ):
+    def _add_config( self, content, name="tool_conf.xml" ):
+        is_json = name.endswith(".json")
         path = self._tool_conf_path( name=name )
         with open( path, "w" ) as f:
-            f.write( xml )
+            if not is_json or isinstance(content, string_types):
+                f.write( content )
+            else:
+                json.dump(content, f)
         self.config_files.append( path )
 
     def _tool_conf_path( self, name="tool_conf.xml" ):
@@ -146,20 +153,22 @@ class ToolBoxTestCase( BaseToolBoxTestCase ):
         assert toolbox.get_tool( "not_a_test_tool" ) is None
 
     def test_to_dict_in_panel( self ):
-        self._init_tool_in_section()
-        mapper = routes.Mapper()
-        mapper.connect( "tool_runner", "/test/tool_runner" )
-        as_dict = self.toolbox.to_dict( mock_trans() )
-        test_section = self._find_section(as_dict, "t")
-        assert len(test_section["elems"]) == 1
-        assert test_section["elems"][0]["id"] == "test_tool"
+        for json_conf in [True, False]:
+            self._init_tool_in_section(json=json_conf)
+            mapper = routes.Mapper()
+            mapper.connect( "tool_runner", "/test/tool_runner" )
+            as_dict = self.toolbox.to_dict( mock_trans() )
+            test_section = self._find_section(as_dict, "t")
+            assert len(test_section["elems"]) == 1
+            assert test_section["elems"][0]["id"] == "test_tool"
 
     def test_to_dict_out_of_panel( self ):
-        self._init_tool_in_section()
-        mapper = routes.Mapper()
-        mapper.connect( "tool_runner", "/test/tool_runner" )
-        as_dict = self.toolbox.to_dict( mock_trans(), in_panel=False )
-        assert as_dict[0]["id"] == "test_tool"
+        for json_conf in [True, False]:
+            self._init_tool_in_section(json=json_conf)
+            mapper = routes.Mapper()
+            mapper.connect( "tool_runner", "/test/tool_runner" )
+            as_dict = self.toolbox.to_dict( mock_trans(), in_panel=False )
+            assert as_dict[0]["id"] == "test_tool"
 
     def test_out_of_panel_filtering( self ):
         self._init_tool_in_section()
@@ -183,7 +192,7 @@ class ToolBoxTestCase( BaseToolBoxTestCase ):
             if elem.get("id") == section_id:
                 assert elem["model_class"] == "ToolSection"
                 return elem
-        assert False, "Failed to find section with id [%s]" % id
+        assert False, "Failed to find section with id [%s]" % section_id
 
     def test_tool_shed_properties( self ):
         self._init_tool()
@@ -232,7 +241,7 @@ class ToolBoxTestCase( BaseToolBoxTestCase ):
         # Assert only newer version of the tool loaded into the panel.
         section = self.toolbox._tool_panel["tid"]
         assert len(section.elems) == 1
-        assert section.elems.values()[0].id == "github.com/galaxyproject/example/test_tool/0.2"
+        assert next(iter(section.elems.values())).id == "github.com/galaxyproject/example/test_tool/0.2"
 
     def test_group_tools_out_of_section( self ):
         self._init_tool()
@@ -275,12 +284,19 @@ class ToolBoxTestCase( BaseToolBoxTestCase ):
         toolbox = self.toolbox
         assert toolbox.get_tool( "test_tool" ) is not None
 
+    def test_tool_dir_json( self ):
+        self._init_tool()
+        self._add_config({"items": [{"type": "tool_dir", "dir": self.test_directory}]}, name="tool_conf.json")
+
+        toolbox = self.toolbox
+        assert toolbox.get_tool( "test_tool" ) is not None
+
     def test_workflow_in_panel( self ):
         stored_workflow = self.__test_workflow()
         encoded_id = self.app.security.encode_id( stored_workflow.id )
         self._add_config( """<toolbox><workflow id="%s" /></toolbox>""" % encoded_id )
         assert len( self.toolbox._tool_panel ) == 1
-        panel_workflow = self.toolbox._tool_panel.values()[ 0 ]
+        panel_workflow = next(iter(self.toolbox._tool_panel.values()))
         assert panel_workflow == stored_workflow.latest_workflow
         # TODO: test to_dict with workflows
 
@@ -291,7 +307,7 @@ class ToolBoxTestCase( BaseToolBoxTestCase ):
         assert len( self.toolbox._tool_panel ) == 1
         section = self.toolbox._tool_panel[ 'tid' ]
         assert len( section.elems ) == 1
-        panel_workflow = section.elems.values()[ 0 ]
+        panel_workflow = next(iter(section.elems.values()))
         assert panel_workflow == stored_workflow.latest_workflow
 
     def test_label_in_panel( self ):
@@ -305,13 +321,23 @@ class ToolBoxTestCase( BaseToolBoxTestCase ):
         section = self.toolbox._tool_panel[ 'tid' ]
         self.__check_test_labels( section.elems )
 
-    def _init_tool_in_section( self ):
+    def _init_tool_in_section( self, json=False ):
         self._init_tool()
-        self._add_config( """<toolbox><section id="t" name="test"><tool file="tool.xml" /></section></toolbox>""" )
+        if not json:
+            self._add_config( """<toolbox><section id="t" name="test"><tool file="tool.xml" /></section></toolbox>""" )
+        else:
+            section = {
+                "type": "section",
+                "id": "t",
+                "name": "test",
+                "items": [{"type": "tool",
+                           "file": "tool.xml"}],
+            }
+            self._add_config({"items": [section]}, name="tool_conf.json")
 
     def __check_test_labels( self, panel_dict ):
-        assert panel_dict.keys() == ["label_lab1", "label_lab2"]
-        label1 = panel_dict.values()[ 0 ]
+        assert list(panel_dict.keys()) == ["label_lab1", "label_lab2"]
+        label1 = next(iter(panel_dict.values()))
         assert label1.id == "lab1"
         assert label1.text == "Label 1"
 

@@ -32,28 +32,24 @@ class TestLibraryFeatures( TwillTestCase ):
 
     def test_000_initiate_users( self ):
         """Ensuring all required user accounts exist"""
-        self.logout()
         self.login( email='test1@bx.psu.edu', username='regular-user1' )
         global regular_user1
         regular_user1 = get_user( 'test1@bx.psu.edu' )
         assert regular_user1 is not None, 'Problem retrieving user with email "test1@bx.psu.edu" from the database'
         global regular_user1_private_role
         regular_user1_private_role = get_private_role( regular_user1 )
-        self.logout()
         self.login( email='test2@bx.psu.edu', username='regular-user2' )
         global regular_user2
         regular_user2 = get_user( 'test2@bx.psu.edu' )
         assert regular_user2 is not None, 'Problem retrieving user with email "test2@bx.psu.edu" from the database'
         global regular_user2_private_role
         regular_user2_private_role = get_private_role( regular_user2 )
-        self.logout()
         self.login( email='test3@bx.psu.edu', username='regular-user3' )
         global regular_user3
         regular_user3 = get_user( 'test3@bx.psu.edu' )
         assert regular_user3 is not None, 'Problem retrieving user with email "test3@bx.psu.edu" from the database'
         global regular_user3_private_role
         regular_user3_private_role = get_private_role( regular_user3 )
-        self.logout()
         self.login( email='test@bx.psu.edu', username='admin-user' )
         global admin_user
         admin_user = get_user( 'test@bx.psu.edu' )
@@ -295,8 +291,8 @@ class TestLibraryFeatures( TwillTestCase ):
                            library_id=self.security.encode_id( library2.id ) )
         # Check the CheckboxField to make sure the template contents are inherited
         self.library_info( 'library_admin',
-                            self.security.encode_id( library2.id ),
-                            template_fields=[ ( checkbox_field_name, '1' ) ] )
+                           self.security.encode_id( library2.id ),
+                           template_fields=[ ( checkbox_field_name, '1' ) ] )
 
     def test_055_add_folder2_to_library2( self ):
         """Testing adding a folder to library2"""
@@ -372,8 +368,8 @@ class TestLibraryFeatures( TwillTestCase ):
         # Select the 2nd option in the SelectField to make sure the template contents are inherited
         # SelectField option names are zero-based
         self.library_info( 'library_admin',
-                            self.security.encode_id( library3.id ),
-                            template_fields=[ ( select_field_name, 'Option1' ) ] )
+                           self.security.encode_id( library3.id ),
+                           template_fields=[ ( select_field_name, 'Option1' ) ] )
 
     def test_085_add_folder3_to_library3( self ):
         """Testing adding a folder to library3"""
@@ -472,8 +468,8 @@ class TestLibraryFeatures( TwillTestCase ):
                            library_id=self.security.encode_id( library4.id ) )
         # Select the 2nd option in the SelectField to make sure the template contents are inherited
         self.library_info( 'library_admin',
-                            self.security.encode_id( library4.id ),
-                            template_fields=[ ( textarea_name, 'This text should be inherited' ) ] )
+                           self.security.encode_id( library4.id ),
+                           template_fields=[ ( textarea_name, 'This text should be inherited' ) ] )
 
     def test_110_add_folder4_to_library4( self ):
         """Testing adding a folder to library4"""
@@ -739,4 +735,3 @@ class TestLibraryFeatures( TwillTestCase ):
             refresh( user )
             if len( user.roles) != 1:
                 raise AssertionError( '%d UserRoleAssociations are associated with %s ( should be 1 )' % ( len( user.roles ), user.email ) )
-        self.logout()

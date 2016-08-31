@@ -2,6 +2,8 @@
 Deserialize Galaxy resources (hdas, ldas, datasets, genomes, etc.) from
 a dictionary of string data/ids (often from a query string).
 """
+import json
+import logging
 import weakref
 
 import galaxy.exceptions
@@ -10,7 +12,6 @@ from galaxy.util import bunch
 from galaxy.managers import visualizations as visualization_manager
 from galaxy.managers import hdas as hda_manager
 
-import logging
 log = logging.getLogger( __name__ )
 
 
@@ -31,7 +32,7 @@ class ResourceParser( object ):
         'int'   : int,
         'float' : float,
         # 'date'  : lambda param: ,
-        'json'  : ( lambda param: galaxy.util.json.loads(
+        'json'  : ( lambda param: json.loads(
             galaxy.util.sanitize_html.sanitize_html( param ) ) ),
     }
 
@@ -71,13 +72,13 @@ class ResourceParser( object ):
                 try:
                     target_param_modifiers = params_that_modify_other_params.get( param_name, None )
                     resource = self.parse_parameter( trans, param_config,
-                        query_val, param_modifiers=target_param_modifiers )
+                                                     query_val, param_modifiers=target_param_modifiers )
 
-                except Exception, exception:
+                except Exception as exception:
                     if trans.debug:
                         raise
                     else:
-                        log.warn( 'Exception parsing visualization param from query: %s, %s, (%s) %s',
+                        log.warning( 'Exception parsing visualization param from query: %s, %s, (%s) %s',
                                   param_name, query_val, str( type( exception ) ), str( exception ) )
                     resource = None
 
@@ -107,9 +108,9 @@ class ResourceParser( object ):
                 try:
                     config_val = self.parse_parameter( trans, param_config, config_val )
 
-                except Exception, exception:
-                    log.warn( 'Exception parsing visualization param from query: '
-                        + '%s, %s, (%s) %s' % ( param_name, config_val, str( type( exception ) ), str( exception ) ))
+                except Exception as exception:
+                    log.warning( 'Exception parsing visualization param from query: ' +
+                              '%s, %s, (%s) %s' % ( param_name, config_val, str( type( exception ) ), str( exception ) ))
                     config_val = None
 
             # here - we've either had no value in the query_params or there was a failure to parse

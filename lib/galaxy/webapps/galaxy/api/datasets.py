@@ -1,6 +1,10 @@
 """
 API operations on the contents of a history dataset.
 """
+from six import string_types
+
+from galaxy import model
+from galaxy import exceptions as galaxy_exceptions
 from galaxy import web
 from galaxy.web.framework.helpers import is_true
 from galaxy import util
@@ -24,6 +28,13 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
         super( DatasetsController, self ).__init__( app )
         self.hda_manager = managers.hdas.HDAManager( app )
         self.hda_serializer = managers.hdas.HDASerializer( self.app )
+
+    def _parse_serialization_params( self, kwd, default_view ):
+        view = kwd.get( 'view', None )
+        keys = kwd.get( 'keys' )
+        if isinstance( keys, string_types ):
+            keys = keys.split( ',' )
+        return dict( view=view, keys=keys, default_view=default_view )
 
     @web.expose_api
     def index( self, trans, **kwd ):
@@ -67,7 +78,7 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
                 # Default: return dataset as dict.
                 if hda_ldda == 'hda':
                     return self.hda_serializer.serialize_to_view( dataset,
-                        view=kwd.get( 'view', 'detailed' ), user=trans.user, trans=trans )
+                                                                  view=kwd.get( 'view', 'detailed' ), user=trans.user, trans=trans )
                 else:
                     rval = dataset.to_dict()
 
@@ -111,7 +122,7 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
         # If there is a chrom, check for data on the chrom.
         if chrom:
             data_provider = trans.app.data_provider_registry.get_data_provider( trans,
-                original_dataset=dataset, source='index' )
+                                                                                original_dataset=dataset, source='index' )
             if not data_provider.has_data( chrom ):
                 return dataset.conversion_messages.NO_DATA
 
@@ -145,7 +156,7 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
         if msg:
             return msg
 
-        # Get datasources and check for essages.
+        # Get datasources and check for messages.
         data_sources = dataset.get_datasources( trans )
         messages_list = [ data_source_dict[ 'message' ] for data_source_dict in data_sources.values() ]
         return_message = self._get_highest_priority_msg( messages_list )
@@ -240,7 +251,7 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
 
         registry = trans.app.data_provider_registry
 
-        # allow the caller to specifiy which provider is used
+        # allow the caller to specify which provider is used
         #   pulling from the original providers if possible, then the new providers
         if provider:
             if provider in registry.dataset_type_name_to_data_provider:
@@ -267,7 +278,7 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
 
     @web.expose_api_raw_anonymous
     def display( self, trans, history_content_id, history_id,
-                 preview=False, filename=None, to_ext=None, chunk=None, raw=False, **kwd ):
+                 preview=False, filename=None, to_ext=None, raw=False, **kwd ):
         """
         GET /api/histories/{encoded_history_id}/contents/{encoded_content_id}/display
         Displays history content (dataset).
@@ -286,7 +297,8 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
             if raw:
                 if filename and filename != 'index':
                     file_path = trans.app.object_store.get_filename( hda.dataset,
-                        extra_dir=( 'dataset_%s_files' % hda.dataset.id ), alt_name=filename)
+                                                                     extra_dir=( 'dataset_%s_files' % hda.dataset.id ),
+                                                                     alt_name=filename)
                 else:
                     file_path = hda.file_name
                 rval = open( file_path )
@@ -295,7 +307,7 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
                 display_kwd = kwd.copy()
                 if 'key' in display_kwd:
                     del display_kwd["key"]
-                rval = hda.datatype.display_data( trans, hda, preview, filename, to_ext, chunk, **display_kwd )
+                rval = hda.datatype.display_data( trans, hda, preview, filename, to_ext, **display_kwd )
 
         except Exception as exception:
             log.error( "Error getting display data for dataset (%s) from history (%s): %s",
@@ -304,3 +316,49 @@ class DatasetsController( BaseAPIController, UsesVisualizationMixin ):
             rval = ( "Could not get display data for dataset: " + str( exception ) )
 
         return rval
+
+    @web._future_expose_api_anonymous
+    def converted( self, trans, dataset_id, ext, **kwargs ):
+        """
+        converted( self, trans, dataset_id, ext, **kwargs )
+        * GET /api/datasets/{dataset_id}/converted/{ext}
+            return information about datasets made by converting this dataset
+            to a new format
+
+        :type   dataset_id: str
+        :param  dataset_id: the encoded id of the original HDA to check
+        :type   ext:        str
+        :param  ext:        file extension of the target format or None.
+
+        If there is no existing converted dataset for the format in `ext`,
+        one will be created.
+
+        If `ext` is None, a dictionary will be returned of the form
+        { <converted extension> : <converted id>, ... } containing all the
+        *existing* converted datasets.
+
+        ..note: `view` and `keys` are also available to control the serialization
+            of individual datasets. They have no effect when `ext` is None.
+
+        :rtype:     dict
+        :returns:   dictionary containing detailed HDA information
+                    or (if `ext` is None) an extension->dataset_id map
+        """
+        decoded_id = self.decode_id( dataset_id )
+        hda = self.hda_manager.get_accessible( decoded_id, trans.user )
+        if ext:
+            converted = self._get_or_create_converted( trans, hda, ext, **kwargs )
+            return self.hda_serializer.serialize_to_view( converted,
+                user=trans.user, trans=trans, **self._parse_serialization_params( kwargs, 'detailed' ) )
+
+        return self.hda_serializer.serialize_converted_datasets( hda, 'converted' )
+
+    def _get_or_create_converted( self, trans, original, target_ext, **kwargs ):
+        try:
+            original.get_converted_dataset( trans, target_ext )
+            converted = original.get_converted_files_by_type( target_ext )
+            return converted
+
+        except model.NoConverterException:
+            exc_data = dict( source=original.ext, target=target_ext, available=original.get_converter_types().keys() )
+            raise galaxy_exceptions.RequestParameterInvalidException( 'Conversion not possible', **exc_data )

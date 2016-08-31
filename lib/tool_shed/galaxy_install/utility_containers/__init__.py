@@ -1,5 +1,4 @@
 import logging
-import os
 import threading
 
 from tool_shed.utility_containers import utility_container_manager
@@ -138,7 +137,7 @@ class GalaxyUtilityContainerManager( utility_container_manager.UtilityContainerM
                                                              error_messages=data_managers_errors,
                                                              label='Invalid Data Managers' )
                 containers_dict[ 'invalid_data_managers' ] = invalid_data_managers_root_folder
-        except Exception, e:
+        except Exception as e:
             log.debug( "Exception in build_repository_containers: %s" % str( e ) )
         finally:
             lock.release()

@@ -5,21 +5,13 @@ Submit a DRMAA job given a user id and a job template file (in JSON format)
 defining any or all of the following: args, remoteCommand, outputPath,
 errorPath, nativeSpecification, name, email, project
 """
-
-import os
-import sys
+from __future__ import print_function
 import errno
-import pwd
 import json
+import os
+import pwd
+import sys
 
-#import drmaa
-new_path = [ os.path.join( os.getcwd(), "lib" ) ]
-new_path.extend( sys.path[1:] )  # remove scripts/ from the path
-sys.path = new_path
-
-from galaxy import eggs
-import pkg_resources
-pkg_resources.require("drmaa")
 import drmaa
 
 DRMAA_jobTemplate_attributes = [ 'args', 'remoteCommand', 'outputPath', 'errorPath', 'nativeSpecification',
@@ -104,7 +96,7 @@ def set_user(uid, assign_all_groups):
             os.setgroups(groups)
         os.setuid(uid)
 
-    except OSError, e:
+    except OSError as e:
         if e.errno == errno.EPERM:
             sys.stderr.write( "error: setuid(%d) failed: permission denied. Did you setup 'sudo' correctly for this script?\n" % uid )
             exit(1)
@@ -137,7 +129,7 @@ def main():
     s.exit()
 
     # Print the Job-ID and exit. Galaxy will pick it up from there.
-    print jobId
+    print(jobId)
 
 if __name__ == "__main__":
     main()

@@ -4,16 +4,14 @@ import shutil
 import sys
 from string import Template
 
-from galaxy.util import unicodify, nice_size
-
-from galaxy import eggs
-
-eggs.require( 'MarkupSafe' )
 import markupsafe
+from six import text_type
+
+from galaxy.util import nice_size, unicodify
 
 log = logging.getLogger( __name__ )
 
-CHUNK_SIZE = 2**20  # 1Mb
+CHUNK_SIZE = 2 ** 20  # 1Mb
 INSTALLATION_LOG = 'INSTALLATION.log'
 # Set no activity timeout to 20 minutes.
 NO_OUTPUT_TIMEOUT = 3600.0
@@ -62,17 +60,19 @@ def evaluate_template( text, install_environment ):
 def get_env_var_values( install_environment ):
     """
     Return a dictionary of values, some of which enable substitution of reserved words for the values.
-    The received install_enviroment object has 2 important attributes for reserved word substitution:
+    The received install_enviroment object has 3 important attributes for reserved word substitution:
     install_environment.tool_shed_repository_install_dir is the root installation directory of the repository
-    that contains the tool dependency being installed, and install_environment.install_dir is the root
-    installation directory of the tool dependency.
+    that contains the tool dependency being installed, install_environment.install_dir is the root
+    installation directory of the tool dependency, and install_environment.tmp_work_dir is the
+    temporary directory where the tool dependency compilation/installation is being processed.
     """
     env_var_dict = {}
     env_var_dict[ 'REPOSITORY_INSTALL_DIR' ] = install_environment.tool_shed_repository_install_dir
     env_var_dict[ 'INSTALL_DIR' ] = install_environment.install_dir
+    env_var_dict[ 'TMP_WORK_DIR' ] = install_environment.tmp_work_dir
     env_var_dict[ 'system_install' ] = install_environment.install_dir
     # If the Python interpreter is 64bit then we can safely assume that the underlying system is also 64bit.
-    env_var_dict[ '__is64bit__' ] = sys.maxsize > 2**32
+    env_var_dict[ '__is64bit__' ] = sys.maxsize > 2 ** 32
     return env_var_dict
 
 
@@ -90,13 +90,11 @@ def get_file_type_str( changeset_revision, file_type ):
 
 def move_file( current_dir, source, destination, rename_to=None ):
     source_path = os.path.abspath( os.path.join( current_dir, source ) )
-    source_file = os.path.basename( source_path )
+    destination_directory = os.path.join( destination )
     if rename_to is not None:
-        destination_file = rename_to
-        destination_directory = os.path.join( destination )
-        destination_path = os.path.join( destination_directory, destination_file )
+        destination_path = os.path.join( destination_directory, rename_to )
     else:
-        destination_directory = os.path.join( destination )
+        source_file = os.path.basename( source_path )
         destination_path = os.path.join( destination_directory, source_file )
     if not os.path.exists( destination_directory ):
         os.makedirs( destination_directory )
@@ -143,9 +141,9 @@ def to_html_string( text ):
     if text:
         try:
             text = unicodify( text )
-        except UnicodeDecodeError, e:
+        except UnicodeDecodeError as e:
             return "Error decoding string: %s" % str( e )
-        text = unicode( markupsafe.escape( text ) )
+        text = text_type( markupsafe.escape( text ) )
         text = text.replace( '\n', '<br/>' )
         text = text.replace( '    ', '&nbsp;&nbsp;&nbsp;&nbsp;' )
         text = text.replace( ' ', '&nbsp;' )

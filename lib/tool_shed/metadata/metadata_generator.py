@@ -3,20 +3,21 @@ import logging
 import os
 import tempfile
 
+from sqlalchemy import and_
+
 from galaxy import util
-from galaxy.datatypes import checkers
-from galaxy.model.orm import and_
 from galaxy.tools.data_manager.manager import DataManager
+from galaxy.tools.loader_directory import looks_like_a_tool
 from galaxy.tools.parser.interface import TestCollectionDef
 from galaxy.web import url_for
-
 from tool_shed.repository_types import util as rt_util
 from tool_shed.tools import tool_validator
-
 from tool_shed.util import basic_util
 from tool_shed.util import common_util
 from tool_shed.util import hg_util
 from tool_shed.util import readme_util
+from tool_shed.util import metadata_util
+from tool_shed.util import repository_util
 from tool_shed.util import shed_util_common as suc
 from tool_shed.util import tool_dependency_util
 from tool_shed.util import tool_util
@@ -57,7 +58,7 @@ class MetadataGenerator( object ):
                 repository_files_dir = self.repository.repo_files_directory( self.app )
             if metadata_dict is None:
                 # Shed related tool panel configs are only relevant to Galaxy.
-                self.metadata_dict = { 'shed_config_filename' : self.shed_config_dict.get( 'config_filename', None ) }
+                self.metadata_dict = { 'shed_config_filename': self.shed_config_dict.get( 'config_filename', None ) }
             else:
                 self.metadata_dict = metadata_dict
         else:
@@ -313,7 +314,7 @@ class MetadataGenerator( object ):
         readme_file_names = readme_util.get_readme_file_names( str( self.repository.name ) )
         if self.app.name == 'galaxy':
             # Shed related tool panel configs are only relevant to Galaxy.
-            metadata_dict = { 'shed_config_filename' : self.shed_config_dict.get( 'config_filename' ) }
+            metadata_dict = { 'shed_config_filename': self.shed_config_dict.get( 'config_filename' ) }
         else:
             metadata_dict = {}
         readme_files = []
@@ -395,55 +396,47 @@ class MetadataGenerator( object ):
                                                                                              self.shed_config_dict )
                         readme_files.append( relative_path_to_readme )
                     # See if we have a tool config.
-                    elif name not in self.NOT_TOOL_CONFIGS and name.endswith( '.xml' ):
-                        full_path = str( os.path.abspath( os.path.join( root, name ) ) )
-                        if os.path.getsize( full_path ) > 0:
-                            if not ( checkers.check_binary( full_path ) or
-                                     checkers.check_image( full_path ) or
-                                     checkers.check_gzip( full_path )[ 0 ] or
-                                     checkers.check_bz2( full_path )[ 0 ] or
-                                     checkers.check_zip( full_path ) ):
-                                # Make sure we're looking at a tool config and not a display application
-                                # config or something else.
-                                element_tree, error_message = xml_util.parse_xml( full_path )
-                                if element_tree is None:
-                                    is_tool = False
+                    elif looks_like_a_tool(os.path.join( root, name ), invalid_names=self.NOT_TOOL_CONFIGS ):
+                        full_path = str(os.path.abspath(os.path.join( root, name )))  # why the str, seems very odd
+                        element_tree, error_message = xml_util.parse_xml( full_path )
+                        if element_tree is None:
+                            is_tool = False
+                        else:
+                            element_tree_root = element_tree.getroot()
+                            is_tool = element_tree_root.tag == 'tool'
+                        if is_tool:
+                            tool, valid, error_message = \
+                                tv.load_tool_from_config( self.app.security.encode_id( self.repository.id ),
+                                                          full_path )
+                            if tool is None:
+                                if not valid:
+                                    invalid_tool_configs.append( name )
+                                    self.invalid_file_tups.append( ( name, error_message ) )
+                            else:
+                                invalid_files_and_errors_tups = \
+                                    tv.check_tool_input_params( files_dir,
+                                                                name,
+                                                                tool,
+                                                                sample_file_copy_paths )
+                                can_set_metadata = True
+                                for tup in invalid_files_and_errors_tups:
+                                    if name in tup:
+                                        can_set_metadata = False
+                                        invalid_tool_configs.append( name )
+                                        break
+                                if can_set_metadata:
+                                    relative_path_to_tool_config = \
+                                        self.get_relative_path_to_repository_file( root,
+                                                                                   name,
+                                                                                   self.relative_install_dir,
+                                                                                   work_dir,
+                                                                                   self.shed_config_dict )
+                                    metadata_dict = self.generate_tool_metadata( relative_path_to_tool_config,
+                                                                                 tool,
+                                                                                 metadata_dict )
                                 else:
-                                    element_tree_root = element_tree.getroot()
-                                    is_tool = element_tree_root.tag == 'tool'
-                                if is_tool:
-                                    tool, valid, error_message = \
-                                        tv.load_tool_from_config( self.app.security.encode_id( self.repository.id ),
-                                                                  full_path )
-                                    if tool is None:
-                                        if not valid:
-                                            invalid_tool_configs.append( name )
-                                            self.invalid_file_tups.append( ( name, error_message ) )
-                                    else:
-                                        invalid_files_and_errors_tups = \
-                                            tv.check_tool_input_params( files_dir,
-                                                                        name,
-                                                                        tool,
-                                                                        sample_file_copy_paths )
-                                        can_set_metadata = True
-                                        for tup in invalid_files_and_errors_tups:
-                                            if name in tup:
-                                                can_set_metadata = False
-                                                invalid_tool_configs.append( name )
-                                                break
-                                        if can_set_metadata:
-                                            relative_path_to_tool_config = \
-                                                self.get_relative_path_to_repository_file( root,
-                                                                                           name,
-                                                                                           self.relative_install_dir,
-                                                                                           work_dir,
-                                                                                           self.shed_config_dict )
-                                            metadata_dict = self.generate_tool_metadata( relative_path_to_tool_config,
-                                                                                         tool,
-                                                                                         metadata_dict )
-                                        else:
-                                            for tup in invalid_files_and_errors_tups:
-                                                self.invalid_file_tups.append( tup )
+                                    for tup in invalid_files_and_errors_tups:
+                                        self.invalid_file_tups.append( tup )
                     # Find all exported workflows.
                     elif name.endswith( '.ga' ):
                         relative_path = os.path.join( root, name )
@@ -455,7 +448,7 @@ class MetadataGenerator( object ):
                                 valid_exported_galaxy_workflow = True
                                 try:
                                     exported_workflow_dict = json.loads( workflow_text )
-                                except Exception, e:
+                                except Exception as e:
                                     log.exception( "Skipping file %s since it does not seem to be a valid exported Galaxy workflow: %s"
                                                    % ( str( relative_path ), str( e ) ) )
                                     valid_exported_galaxy_workflow = False
@@ -856,7 +849,7 @@ class MetadataGenerator( object ):
                             sample_file_copy_paths.append( relative_path_to_sample_file )
                             if tool_path and relative_install_dir:
                                 if relative_path_to_sample_file.startswith( os.path.join( tool_path, relative_install_dir ) ):
-                                    relative_path_to_sample_file = relative_path_to_sample_file[ len( tool_path ) + 1 :]
+                                    relative_path_to_sample_file = relative_path_to_sample_file[ len( tool_path ) + 1:]
                         sample_file_metadata_paths.append( relative_path_to_sample_file )
         return sample_file_metadata_paths, sample_file_copy_paths
 
@@ -912,30 +905,30 @@ class MetadataGenerator( object ):
             # the changeset_revision defined in the repository_elem (it may be outdated).  If
             # we're successful in locating an installed repository with the attributes defined
             # in the repository_elem, we know it is valid.
-            repository = suc.get_repository_for_dependency_relationship( self.app,
-                                                                         toolshed,
-                                                                         name,
-                                                                         owner,
-                                                                         changeset_revision )
+            repository = repository_util.get_repository_for_dependency_relationship( self.app,
+                                                                                     toolshed,
+                                                                                     name,
+                                                                                     owner,
+                                                                                     changeset_revision )
             if repository:
                 return repository_dependency_tup, is_valid, error_message
             else:
                 # Send a request to the tool shed to retrieve appropriate additional changeset
                 # revisions with which the repository
                 # may have been installed.
-                text = suc.get_updated_changeset_revisions_from_tool_shed( self.app,
-                                                                           toolshed,
-                                                                           name,
-                                                                           owner,
-                                                                           changeset_revision )
-                if text:
-                    updated_changeset_revisions = util.listify( text )
-                    for updated_changeset_revision in updated_changeset_revisions:
-                        repository = suc.get_repository_for_dependency_relationship( self.app,
+                text = metadata_util.get_updated_changeset_revisions_from_tool_shed( self.app,
                                                                                      toolshed,
                                                                                      name,
                                                                                      owner,
-                                                                                     updated_changeset_revision )
+                                                                                     changeset_revision )
+                if text:
+                    updated_changeset_revisions = util.listify( text )
+                    for updated_changeset_revision in updated_changeset_revisions:
+                        repository = repository_util.get_repository_for_dependency_relationship( self.app,
+                                                                                                 toolshed,
+                                                                                                 name,
+                                                                                                 owner,
+                                                                                                 updated_changeset_revision )
                         if repository:
                             return repository_dependency_tup, is_valid, error_message
                         if self.updating_installed_repository:
@@ -970,7 +963,7 @@ class MetadataGenerator( object ):
                 except Exception:
                     error_message = "Ignoring repository dependency definition for tool shed %s, name %s, owner %s, " % \
                         ( toolshed, name, owner )
-                    error_message += "changeset revision %s because the owner is invalid.  " % changeset_revision
+                    error_message += "changeset revision %s because the owner is invalid." % changeset_revision
                     log.debug( error_message )
                     is_valid = False
                     return repository_dependency_tup, is_valid, error_message
@@ -1072,7 +1065,7 @@ class MetadataGenerator( object ):
             else:
                 self.set_changeset_revision( changeset_revision )
             self.shed_config_dict = repository.get_shed_config_dict( self.app )
-            self.metadata_dict = { 'shed_config_filename' : self.shed_config_dict.get( 'config_filename', None ) }
+            self.metadata_dict = { 'shed_config_filename': self.shed_config_dict.get( 'config_filename', None ) }
         else:
             if relative_install_dir is None and self.repository is not None:
                 relative_install_dir = repository.repo_path( self.app )
@@ -1102,11 +1095,14 @@ class MetadataGenerator( object ):
             repository_dependencies_dict = metadata.get( 'invalid_repository_dependencies', None )
         for repository_dependency_tup in repository_dependency_tups:
             if is_valid:
-                ( tool_shed, name, owner, changeset_revision, prior_installation_required,
-                  only_if_compiling_contained_td) = repository_dependency_tup
+                tool_shed, name, owner, changeset_revision, \
+                    prior_installation_required, \
+                    only_if_compiling_contained_td = repository_dependency_tup
             else:
-                ( tool_shed, name, owner, changeset_revision, prior_installation_required,
-                  only_if_compiling_contained_td, error_message ) = repository_dependency_tup
+                tool_shed, name, owner, changeset_revision, \
+                    prior_installation_required, \
+                    only_if_compiling_contained_td, error_message = \
+                    repository_dependency_tup
             if repository_dependencies_dict:
                 repository_dependencies = repository_dependencies_dict.get( 'repository_dependencies', [] )
                 for repository_dependency_tup in repository_dependency_tups:

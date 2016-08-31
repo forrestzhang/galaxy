@@ -32,7 +32,7 @@ class VisualizationManager( sharable.SharableModelManager ):
         """
         super( VisualizationManager, self ).__init__( app, *args, **kwargs )
 
-    #def copy( self, trans, visualization, user, **kwargs ):
+    # def copy( self, trans, visualization, user, **kwargs ):
     #    """
     #    """
     #    pass
@@ -42,11 +42,12 @@ class VisualizationSerializer( sharable.SharableModelSerializer ):
     """
     Interface/service object for serializing visualizations into dictionaries.
     """
+    model_manager_class = VisualizationManager
     SINGLE_CHAR_ABBR = 'v'
 
     def __init__( self, app ):
         super( VisualizationSerializer, self ).__init__( app )
-        self.visualizations_manager = VisualizationManager( app )
+        self.visualization_manager = self.manager
 
         self.default_view = 'summary'
         self.add_view( 'summary', [] )

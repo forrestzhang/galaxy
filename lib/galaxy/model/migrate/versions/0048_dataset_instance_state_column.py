@@ -1,18 +1,18 @@
 """
 Add a state column to the history_dataset_association and library_dataset_dataset_association table.
 """
-
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from sqlalchemy.exc import *
-from migrate import *
-from migrate.changeset import *
-from galaxy.model.custom_types import *
+from __future__ import print_function
 
 import datetime
-now = datetime.datetime.utcnow
+import logging
+import sys
 
-import sys, logging
+from sqlalchemy import Column, MetaData, Table
+from sqlalchemy.exc import NoSuchTableError
+
+from galaxy.model.custom_types import TrimmedString
+
+now = datetime.datetime.utcnow
 log = logging.getLogger( __name__ )
 log.setLevel(logging.DEBUG)
 handler = logging.StreamHandler( sys.stdout )
@@ -25,9 +25,10 @@ metadata = MetaData()
 
 DATASET_INSTANCE_TABLE_NAMES = [ 'history_dataset_association', 'library_dataset_dataset_association' ]
 
+
 def upgrade(migrate_engine):
     metadata.bind = migrate_engine
-    print __doc__
+    print(__doc__)
     metadata.reflect()
     dataset_instance_tables = []
     for table_name in DATASET_INSTANCE_TABLE_NAMES:
@@ -40,10 +41,11 @@ def upgrade(migrate_engine):
             index_name = "ix_%s_state" % table_name
             try:
                 col = Column( "state", TrimmedString( 64 ), index=True, nullable=True )
-                col.create( dataset_instance_table, index_name = index_name)
+                col.create( dataset_instance_table, index_name=index_name)
                 assert col is dataset_instance_table.c.state
-            except Exception, e:
+            except Exception as e:
                 log.debug( "Adding column 'state' to %s table failed: %s" % ( table_name, str( e ) ) )
+
 
 def downgrade(migrate_engine):
     metadata.bind = migrate_engine
@@ -59,5 +61,5 @@ def downgrade(migrate_engine):
             try:
                 col = dataset_instance_table.c.state
                 col.drop()
-            except Exception, e:
+            except Exception as e:
                 log.debug( "Dropping column 'state' from %s table failed: %s" % ( table_name, str( e ) ) )

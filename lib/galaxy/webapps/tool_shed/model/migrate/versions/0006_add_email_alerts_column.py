@@ -1,16 +1,14 @@
 """
 Migration script to add the email_alerts column to the repository table.
 """
+import logging
+import sys
 
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
+from sqlalchemy import Column, MetaData, Table
 
 # Need our custom types, but don't import anything else from model
-from galaxy.model.custom_types import *
+from galaxy.model.custom_types import JSONType
 
-import sys, logging
 log = logging.getLogger( __name__ )
 log.setLevel(logging.DEBUG)
 handler = logging.StreamHandler( sys.stdout )
@@ -20,6 +18,7 @@ handler.setFormatter( formatter )
 log.addHandler( handler )
 
 metadata = MetaData()
+
 
 def upgrade(migrate_engine):
     print __doc__
@@ -32,9 +31,10 @@ def upgrade(migrate_engine):
         # Create
         c.create( Repository_table )
         assert c is Repository_table.c.email_alerts
-    except Exception, e:
+    except Exception as e:
         print "Adding email_alerts column to the repository table failed: %s" % str( e )
         log.debug( "Adding email_alerts column to the repository table failed: %s" % str( e ) )
+
 
 def downgrade(migrate_engine):
     metadata.bind = migrate_engine
@@ -43,6 +43,6 @@ def downgrade(migrate_engine):
     Repository_table = Table( "repository", metadata, autoload=True )
     try:
         Repository_table.c.email_alerts.drop()
-    except Exception, e:
+    except Exception as e:
         print "Dropping column email_alerts from the repository table failed: %s" % str( e )
         log.debug( "Dropping column email_alerts from the repository table failed: %s" % str( e ) )

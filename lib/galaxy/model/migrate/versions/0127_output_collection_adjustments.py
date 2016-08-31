@@ -1,19 +1,17 @@
 """
 Migration script updating collections tables for output collections.
 """
-
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
-from galaxy.model.custom_types import *
+from __future__ import print_function
 
 import datetime
-now = datetime.datetime.utcnow
-
 import logging
-log = logging.getLogger( __name__ )
 
+from sqlalchemy import Column, ForeignKey, Integer, MetaData, Table, TEXT, Unicode
+
+from galaxy.model.custom_types import TrimmedString
+
+now = datetime.datetime.utcnow
+log = logging.getLogger( __name__ )
 metadata = MetaData()
 
 JobToImplicitOutputDatasetCollectionAssociation_table = Table(
@@ -32,7 +30,7 @@ TABLES = [
 
 def upgrade(migrate_engine):
     metadata.bind = migrate_engine
-    print __doc__
+    print(__doc__)
     metadata.reflect()
 
     for table in TABLES:
@@ -47,7 +45,7 @@ def upgrade(migrate_engine):
         populated_message_column = Column( 'populated_state_message', TEXT, nullable=True )
         populated_message_column.create( dataset_collection_table )
     except Exception as e:
-        print str(e)
+        print(str(e))
         log.exception( "Creating dataset collection populated column failed." )
 
 
@@ -65,7 +63,7 @@ def downgrade(migrate_engine):
         populated_message_column = dataset_collection_table.c.populated_state_message
         populated_message_column.drop()
     except Exception as e:
-        print str(e)
+        print(str(e))
         log.exception( "Dropping dataset collection populated_state/ column failed." )
 
 
@@ -73,7 +71,7 @@ def __create(table):
     try:
         table.create()
     except Exception as e:
-        print str(e)
+        print(str(e))
         log.exception("Creating %s table failed: %s" % (table.name, str( e ) ) )
 
 
@@ -81,5 +79,5 @@ def __drop(table):
     try:
         table.drop()
     except Exception as e:
-        print str(e)
+        print(str(e))
         log.exception("Dropping %s table failed: %s" % (table.name, str( e ) ) )

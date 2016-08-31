@@ -3,34 +3,30 @@
 <%def name="browse_files(title_text, directory_path)">
     <script type="text/javascript">
         $(function(){
-            $("#tree").ajaxComplete(function(event, XMLHttpRequest, ajaxOptions) {
-                _log("debug", "ajaxComplete: %o", this); // dom element listening
-            });
             // --- Initialize sample trees
             $("#tree").dynatree({
                 title: "${title_text|h}",
-                rootVisible: true,
-                minExpandLevel: 0, // 1: root node is not collapsible
+                minExpandLevel: 1,
                 persist: false,
                 checkbox: true,
                 selectMode: 3,
                 onPostInit: function(isReloading, isError) {
-                    //alert("reloading: "+isReloading+", error:"+isError);
-                    logMsg("onPostInit(%o, %o) - %o", isReloading, isError, this);
                     // Re-fire onActivate, so the text is updated
                     this.reactivate();
                 }, 
                 fx: { height: "toggle", duration: 200 },
                 // initAjax is hard to fake, so we pass the children as object array:
                 initAjax: {url: "${h.url_for( controller='admin_toolshed', action='open_folder' )}",
-                           dataType: "json", 
-                           data: { folder_path: "${directory_path|h}" },
+                           dataType: "json",
+                           data: { folder_path: "${directory_path|h}",
+                                   repository_id: "${trans.security.encode_id( repository.id )}" },
                 },
                 onLazyRead: function(dtnode){
                     dtnode.appendAjax({
-                        url: "${h.url_for( controller='admin_toolshed', action='open_folder' )}", 
+                        url: "${h.url_for( controller='admin_toolshed', action='open_folder' )}",
                         dataType: "json",
-                        data: { folder_path: dtnode.data.key },
+                        data: { folder_path: dtnode.data.key,
+                                repository_id: "${trans.security.encode_id( repository.id )}" },
                     });
                 },
                 onSelect: function(select, dtnode) {
@@ -55,7 +51,7 @@
                             type: "POST",
                             url: "${h.url_for( controller='admin_toolshed', action='get_file_contents' )}",
                             dataType: "json",
-                            data: { file_path: selected_value },
+                            data: { file_path: selected_value, repository_id: "${trans.security.encode_id( repository.id )}" },
                             success : function( data ) {
                                 cell.html( '<label>'+data+'</label>' )
                             }
@@ -69,7 +65,7 @@
     </script>
 </%def>
 
-<%def name="render_dependencies_section( repository_dependencies_check_box, install_tool_dependencies_check_box, containers_dict, revision_label=None, export=False )">
+<%def name="render_dependencies_section( install_resolver_dependencies_check_box, repository_dependencies_check_box, install_tool_dependencies_check_box, containers_dict, revision_label=None, export=False )">
     <style type="text/css">
         #dependency_table{ table-layout:fixed;
                            width:100%;
@@ -114,8 +110,9 @@
             </p>
         </div>
     </div>
+    <div style="clear: both"></div>
     %if repository_dependencies_root_folder or missing_repository_dependencies_root_folder:
-        %if repository_dependencies_check_box is not None:
+        %if repository_dependencies_check_box:
             <div class="form-row">
                 %if export:
                     <label>Export repository dependencies?</label>
@@ -157,7 +154,7 @@
     %if tool_dependencies_root_folder or missing_tool_dependencies_root_folder:
         %if install_tool_dependencies_check_box is not None:
             <div class="form-row">
-                <label>Handle tool dependencies?</label>
+                <label>When available, install tool shed managed dependencies?</label>
                 <% disabled = trans.app.config.tool_dependency_dir is None %>
                 ${install_tool_dependencies_check_box.get_html( disabled=disabled )}
                 <div class="toolParamHelp" style="clear: both;">
@@ -167,7 +164,6 @@
                         Un-check to skip automatic handling of these tool dependencies.
                     %endif
                 </div>
-            </div>
             <div style="clear: both"></div>
         %endif
         %if tool_dependencies_root_folder:
@@ -190,6 +186,17 @@
                 <div style="clear: both"></div>
             </div>
         %endif
+    </div>
+    %endif
+    <div style="clear: both"></div>
+    %if install_resolver_dependencies_check_box:
+    <div class="form-row">
+        <label>When available, install externally managed dependencies (e.g. conda)? <i>Beta</i></label>
+        ${install_resolver_dependencies_check_box.get_html()}
+        <div class="toolParamHelp" style="clear: both;">
+            Un-check to skip automatic installation of tool dependencies.
+        </div>
+    </div>
     %endif
 </%def>
 

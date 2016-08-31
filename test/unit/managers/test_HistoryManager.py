@@ -1,43 +1,42 @@
 # -*- coding: utf-8 -*-
 """
 """
-import os
 import imp
+import os
 import unittest
 
 test_utils = imp.load_source( 'test_utils',
     os.path.join( os.path.dirname( __file__), '../unittest_utils/utility.py' ) )
 import galaxy_mock
 
-from galaxy import eggs
-eggs.require( 'SQLAlchemy >= 0.4' )
 import sqlalchemy
+from six import string_types
+from sqlalchemy import true
 
-from galaxy import model
-from galaxy import exceptions
+from galaxy import exceptions, model
+from galaxy.managers import base, hdas
+from galaxy.managers.histories import (HistoryDeserializer, HistoryFilters,
+                                       HistoryManager, HistorySerializer)
 
-from base import BaseTestCase
+from .base import BaseTestCase
 
-from galaxy.managers.histories import HistoryManager
-from galaxy.managers.histories import HistorySerializer
-from galaxy.managers.histories import HistoryDeserializer
-from galaxy.managers.histories import HistoryFilters
-from galaxy.managers import hdas
-
-
-# =============================================================================
 default_password = '123456'
 user2_data = dict( email='user2@user2.user2', username='user2', password=default_password )
 user3_data = dict( email='user3@user3.user3', username='user3', password=default_password )
 user4_data = dict( email='user4@user4.user4', username='user4', password=default_password )
 
 
-# =============================================================================
 class HistoryManagerTestCase( BaseTestCase ):
 
     def set_up_managers( self ):
         super( HistoryManagerTestCase, self ).set_up_managers()
         self.history_manager = HistoryManager( self.app )
+        self.hda_manager = hdas.HDAManager( self.app )
+
+    def add_hda_to_history( self, history, **kwargs ):
+        dataset = self.hda_manager.dataset_manager.create()
+        hda = self.hda_manager.create( history=history, dataset=dataset, **kwargs )
+        return hda
 
     def test_base( self ):
         user2 = self.user_manager.create( **user2_data )
@@ -54,13 +53,7 @@ class HistoryManagerTestCase( BaseTestCase ):
         self.assertEqual( history1,
             self.trans.sa_session.query( model.History ).filter( model.History.user == user2 ).one() )
 
-        self.log( "should be able to copy a history" )
         history2 = self.history_manager.copy( history1, user=user3 )
-        self.assertIsInstance( history2, model.History )
-        self.assertEqual( history2.user, user3 )
-        self.assertEqual( history2, self.trans.sa_session.query( model.History ).get( history2.id ) )
-        self.assertEqual( history2.name, history1.name )
-        self.assertNotEqual( history2, history1 )
 
         self.log( "should be able to query" )
         histories = self.trans.sa_session.query( model.History ).all()
@@ -83,13 +76,43 @@ class HistoryManagerTestCase( BaseTestCase ):
         self.assertEqual( self.history_manager.list( order_by=name_first_then_time ),
             [ history2, history1, history3 ] )
 
+    def test_copy( self ):
+        user2 = self.user_manager.create( **user2_data )
+        user3 = self.user_manager.create( **user3_data )
+
+        self.log( "should be able to copy a history (and it's hdas)" )
+        history1 = self.history_manager.create( name='history1', user=user2 )
+        tags = [ u'tag-one' ]
+        annotation = u'history annotation'
+        self.history_manager.set_tags( history1, tags, user=user2 )
+        self.history_manager.annotate( history1, annotation, user=user2 )
+
+        hda = self.add_hda_to_history( history1, name='wat' )
+        hda_tags = [ u'tag-one', u'tag-two' ]
+        hda_annotation = u'annotation'
+        self.hda_manager.set_tags( hda, hda_tags, user=user2 )
+        self.hda_manager.annotate( hda, hda_annotation, user=user2 )
+
+        history2 = self.history_manager.copy( history1, user=user3 )
+        self.assertIsInstance( history2, model.History )
+        self.assertEqual( history2.user, user3 )
+        self.assertEqual( history2, self.trans.sa_session.query( model.History ).get( history2.id ) )
+        self.assertEqual( history2.name, history1.name )
+        self.assertNotEqual( history2, history1 )
+
+        copied_hda = history2.datasets[0]
+        copied_hda_tags = self.hda_manager.get_tags( copied_hda )
+        self.assertEqual( sorted( hda_tags ), sorted( copied_hda_tags ) )
+        copied_hda_annotation = self.hda_manager.annotation( copied_hda )
+        self.assertEqual( hda_annotation, copied_hda_annotation )
+
     def test_has_user( self ):
         owner = self.user_manager.create( **user2_data )
         non_owner = self.user_manager.create( **user3_data )
 
         item1 = self.history_manager.create( user=owner )
         item2 = self.history_manager.create( user=owner )
-        item3 = self.history_manager.create( user=non_owner )
+        self.history_manager.create( user=non_owner )
 
         self.log( "should be able to list items by user" )
         user_histories = self.history_manager.by_user( owner )
@@ -233,7 +256,7 @@ class HistoryManagerTestCase( BaseTestCase ):
             len( self.history_manager.get_share_assocs( item1 ) ), 1 )
         self.assertEqual(
             len( self.history_manager.get_share_assocs( item1, user=non_owner ) ), 1 )
-        self.assertIsInstance( item1.slug, basestring )
+        self.assertIsInstance( item1.slug, string_types )
 
         self.log( "should be able to unshare with specific users" )
         share_assoc = self.history_manager.unshare_with( item1, non_owner )
@@ -309,10 +332,59 @@ class HistoryManagerTestCase( BaseTestCase ):
         self.assertEqual( self.history_manager.set_current_by_id( self.trans, history1.id ), history1 )
         self.assertEqual( self.history_manager.get_current( self.trans ), history1 )
 
+    def test_most_recently_used( self ):
+        user2 = self.user_manager.create( **user2_data )
+        self.trans.set_user( user2 )
+
+        history1 = self.history_manager.create( name='history1', user=user2 )
+        self.trans.set_history( history1 )
+        history2 = self.history_manager.create( name='history2', user=user2 )
+
+        self.log( "should be able to get the most recently used (updated) history for a given user" )
+        self.assertEqual( self.history_manager.most_recent( user2 ), history2 )
+        self.history_manager.update( history1, { 'name': 'new name' })
+        self.assertEqual( self.history_manager.most_recent( user2 ), history1 )
+
+    def test_rating( self ):
+        user2 = self.user_manager.create( **user2_data )
+        manager = self.history_manager
+        item = manager.create( name='history1', user=user2 )
+
+        self.log( "should properly handle no ratings" )
+        self.assertEqual( manager.rating( item, user2 ), None )
+        self.assertEqual( manager.ratings( item ), [] )
+        self.assertEqual( manager.ratings_avg( item ), 0 )
+        self.assertEqual( manager.ratings_count( item ), 0 )
+
+        self.log( "should allow rating by user" )
+        manager.rate( item, user2, 5 )
+        self.assertEqual( manager.rating( item, user2 ), 5 )
+        self.assertEqual( manager.ratings( item ), [ 5 ] )
+        self.assertEqual( manager.ratings_avg( item ), 5 )
+        self.assertEqual( manager.ratings_count( item ), 1 )
+
+        self.log( "should allow updating" )
+        manager.rate( item, user2, 4 )
+        self.assertEqual( manager.rating( item, user2 ), 4 )
+        self.assertEqual( manager.ratings( item ), [ 4 ] )
+        self.assertEqual( manager.ratings_avg( item ), 4 )
+        self.assertEqual( manager.ratings_count( item ), 1 )
+
+        self.log( "should reflect multiple reviews" )
+        user3 = self.user_manager.create( **user3_data )
+        self.assertEqual( manager.rating( item, user3 ), None )
+        manager.rate( item, user3, 1 )
+        self.assertEqual( manager.rating( item, user3 ), 1 )
+        self.assertEqual( manager.ratings( item ), [ 4, 1 ] )
+        self.assertEqual( manager.ratings_avg( item ), 2.5 )
+        self.assertEqual( manager.ratings_count( item ), 2 )
+
 
 # =============================================================================
 # web.url_for doesn't work well in the framework
-testable_url_for = lambda *a, **k: '(fake url): %s, %s' % ( a, k )
+def testable_url_for(*a, **k):
+    return '(fake url): %s, %s' % ( a, k )
+
 HistorySerializer.url_for = staticmethod( testable_url_for )
 hdas.HDASerializer.url_for = staticmethod( testable_url_for )
 
@@ -344,8 +416,8 @@ class HistorySerializerTestCase( BaseTestCase ):
         self.log( 'should have a serializer for all serializable keys' )
         for key in self.history_serializer.serializable_keyset:
             instantiated_attribute = getattr( history1, key, None )
-            if not ( ( key in self.history_serializer.serializers )
-                  or ( isinstance( instantiated_attribute, self.TYPES_NEEDING_NO_SERIALIZERS ) ) ):
+            if not ( ( key in self.history_serializer.serializers ) or
+                    ( isinstance( instantiated_attribute, self.TYPES_NEEDING_NO_SERIALIZERS ) ) ):
                 self.fail( 'no serializer for: %s (%s)' % ( key, instantiated_attribute ) )
         else:
             self.assertTrue( True, 'all serializable keys have a serializer' )
@@ -374,6 +446,18 @@ class HistorySerializerTestCase( BaseTestCase ):
         serialized = self.history_serializer.serialize( history1, sharable_attrs )
         self.assertKeys( serialized, sharable_attrs )
 
+        self.log( 'should return user_id for user with whom it\'s been shared if the requester is the owner' )
+        non_owner = self.user_manager.create( **user3_data )
+        self.history_manager.share_with( history1, non_owner )
+        serialized = self.history_serializer.serialize( history1, [ 'users_shared_with' ], user=user2 )
+        self.assertKeys( serialized, [ 'users_shared_with' ] )
+        self.assertIsInstance( serialized[ 'users_shared_with' ], list )
+        self.assertEqual( serialized[ 'users_shared_with' ][0], self.app.security.encode_id( non_owner.id ) )
+
+        self.log( 'should not return users_shared_with if the requester is not the owner' )
+        serialized = self.history_serializer.serialize( history1, [ 'users_shared_with' ], user=non_owner )
+        self.assertFalse( hasattr( serialized, 'users_shared_with' ) )
+
     def test_purgable( self ):
         user2 = self.user_manager.create( **user2_data )
         history1 = self.history_manager.create( name='history1', user=user2 )
@@ -399,44 +483,11 @@ class HistorySerializerTestCase( BaseTestCase ):
         user2 = self.user_manager.create( **user2_data )
         history1 = self.history_manager.create( name='history1', user=user2 )
         all_keys = list( self.history_serializer.serializable_keyset )
-        serialized = self.history_serializer.serialize( history1, all_keys )
+        serialized = self.history_serializer.serialize( history1, all_keys, user=user2 )
 
         self.log( 'everything serialized should be of the proper type' )
         self.assertIsInstance( serialized[ 'size' ], int )
-        self.assertIsInstance( serialized[ 'nice_size' ], basestring )
-
-        self.log( 'serialized should jsonify well' )
-        self.assertIsJsonifyable( serialized )
-
-    def test_contents( self ):
-        user2 = self.user_manager.create( **user2_data )
-        history1 = self.history_manager.create( name='history1', user=user2 )
-
-        self.log( 'a history with no contents should be properly reflected in empty, etc.' )
-        keys = [ 'empty', 'count', 'state_ids', 'state_details', 'state', 'hdas' ]
-        serialized = self.history_serializer.serialize( history1, keys )
-        self.assertEqual( serialized[ 'state' ], 'new' )
-        self.assertEqual( serialized[ 'empty' ], True )
-        self.assertEqual( serialized[ 'count' ], 0 )
-        self.assertEqual( sum( serialized[ 'state_details' ].values() ), 0 )
-        self.assertEqual( serialized[ 'state_ids' ][ 'ok' ], [] )
-        self.assertIsInstance( serialized[ 'hdas' ], list )
-
-        self.log( 'a history with contents should be properly reflected in empty, etc.' )
-        hda1 = self.hda_manager.create( history=history1, hid=1 )
-        self.hda_manager.update( hda1, dict( state='ok' ) )
-
-        serialized = self.history_serializer.serialize( history1, keys )
-        self.assertEqual( serialized[ 'state' ], 'ok' )
-        self.assertEqual( serialized[ 'empty' ], False )
-        self.assertEqual( serialized[ 'count' ], 1 )
-        self.assertEqual( serialized[ 'state_details' ][ 'ok' ], 1 )
-        self.assertIsInstance( serialized[ 'state_ids' ][ 'ok' ], list )
-        self.assertIsInstance( serialized[ 'hdas' ], list )
-        self.assertIsInstance( serialized[ 'hdas' ][0], basestring )
-
-        serialized = self.history_serializer.serialize( history1, [ 'contents' ] )
-        self.assertHasKeys( serialized[ 'contents' ][0], [ 'id', 'name', 'peek', 'create_time' ])
+        self.assertIsInstance( serialized[ 'nice_size' ], string_types )
 
         self.log( 'serialized should jsonify well' )
         self.assertIsJsonifyable( serialized )
@@ -505,7 +556,7 @@ class HistorySerializerTestCase( BaseTestCase ):
         self.assertEqual( serialized[ 'state_details' ][ 'ok' ], 1 )
         self.assertIsInstance( serialized[ 'state_ids' ][ 'ok' ], list )
         self.assertIsInstance( serialized[ 'hdas' ], list )
-        self.assertIsInstance( serialized[ 'hdas' ][0], basestring )
+        self.assertIsInstance( serialized[ 'hdas' ][0], string_types )
 
         serialized = self.history_serializer.serialize( history1, [ 'contents' ] )
         self.assertHasKeys( serialized[ 'contents' ][0], [ 'id', 'name', 'peek', 'create_time' ])
@@ -513,17 +564,93 @@ class HistorySerializerTestCase( BaseTestCase ):
         self.log( 'serialized should jsonify well' )
         self.assertIsJsonifyable( serialized )
 
+    def test_ratings( self ):
+        user2 = self.user_manager.create( **user2_data )
+        user3 = self.user_manager.create( **user3_data )
+        manager = self.history_manager
+        serializer = self.history_serializer
+        item = manager.create( name='history1', user=user2 )
 
-# # =============================================================================
-# class HistoryDeserializerTestCase( BaseTestCase ):
+        self.log( 'serialization should reflect no ratings' )
+        serialized = serializer.serialize( item, [ 'user_rating', 'community_rating' ], user=user2 )
+        self.assertEqual( serialized[ 'user_rating' ], None )
+        self.assertEqual( serialized[ 'community_rating' ][ 'count' ], 0 )
+        self.assertEqual( serialized[ 'community_rating' ][ 'average' ], 0.0 )
 
-#     def set_up_managers( self ):
-#         super( HistoryDeserializerTestCase, self ).set_up_managers()
-#         self.history_manager = HistoryManager( self.app )
-#         self.history_deserializer = HistoryDeserializer( self.app )
+        self.log( 'serialization should reflect ratings' )
+        manager.rate( item, user2, 1 )
+        manager.rate( item, user3, 4 )
+        serialized = serializer.serialize( item, [ 'user_rating', 'community_rating' ], user=user2 )
+        self.assertEqual( serialized[ 'user_rating' ], 1 )
+        self.assertEqual( serialized[ 'community_rating' ][ 'count' ], 2 )
+        self.assertEqual( serialized[ 'community_rating' ][ 'average' ], 2.5 )
+        self.assertIsJsonifyable( serialized )
 
-#     def test_base( self ):
-#         pass
+        self.log( 'serialization of user_rating without user should error' )
+        self.assertRaises( base.ModelSerializingError,
+            serializer.serialize, item, [ 'user_rating' ] )
+
+
+# =============================================================================
+class HistoryDeserializerTestCase( BaseTestCase ):
+
+    def set_up_managers( self ):
+        super( HistoryDeserializerTestCase, self ).set_up_managers()
+        self.history_manager = HistoryManager( self.app )
+        self.history_deserializer = HistoryDeserializer( self.app )
+
+    def test_ratings( self ):
+        user2 = self.user_manager.create( **user2_data )
+        manager = self.history_manager
+        deserializer = self.history_deserializer
+        item = manager.create( name='history1', user=user2 )
+
+        self.log( 'deserialization should allow ratings change' )
+        deserializer.deserialize( item, { 'user_rating': 4 }, user=user2 )
+        self.assertEqual( manager.rating( item, user2 ), 4 )
+        self.assertEqual( manager.ratings( item ), [ 4 ] )
+        self.assertEqual( manager.ratings_avg( item ), 4 )
+        self.assertEqual( manager.ratings_count( item ), 1 )
+
+        self.log( 'deserialization should fail silently on community_rating' )
+        deserializer.deserialize( item, { 'community_rating': 4 }, user=user2 )
+        self.assertEqual( manager.ratings_count( item ), 1 )
+
+    def test_sharable( self ):
+        manager = self.history_manager
+        deserializer = self.history_deserializer
+
+        user2 = self.user_manager.create( **user2_data )
+        item = manager.create( name='history1', user=user2 )
+        non_owner = self.user_manager.create( **user3_data )
+
+        self.log( 'should allow adding a share by adding a user id to users_shared_with' )
+        non_owner_id = self.app.security.encode_id( non_owner.id )
+        deserializer.deserialize( item, { 'users_shared_with': [ non_owner_id ] }, user=user2 )
+        user_shares = manager.get_share_assocs( item )
+        self.assertEqual( len( user_shares ), 1 )
+        self.assertEqual( user_shares[0].user_id, non_owner.id )
+
+        self.log( 're-adding an existing user id should do nothing' )
+        deserializer.deserialize( item, { 'users_shared_with': [ non_owner_id, non_owner_id ] }, user=user2 )
+        user_shares = manager.get_share_assocs( item )
+        self.assertEqual( len( user_shares ), 1 )
+        self.assertEqual( user_shares[0].user_id, non_owner.id )
+
+        self.log( 'should allow removing a share by not having it in users_shared_with' )
+        deserializer.deserialize( item, { 'users_shared_with': [] }, user=user2 )
+        user_shares = manager.get_share_assocs( item )
+        self.assertEqual( len( user_shares ), 0 )
+
+        self.log( 'adding a bad user id should error' )
+        self.assertRaises( AttributeError,
+            deserializer.deserialize, item, { 'users_shared_with': [ None ] }, user=user2 )
+
+        self.log( 'adding a non-existing user id should do nothing' )
+        non_user_id = self.app.security.encode_id( 99 )
+        deserializer.deserialize( item, { 'users_shared_with': [ non_user_id ] }, user=user2 )
+        user_shares = manager.get_share_assocs( item )
+        self.assertEqual( len( user_shares ), 0 )
 
 
 # =============================================================================
@@ -637,7 +764,7 @@ class HistoryFiltersTestCase( BaseTestCase ):
 
     def test_fn_filter_currying( self ):
         self.filter_parser.fn_filter_parsers = {
-            'name_len' : { 'op': { 'lt' : lambda i, v: len( i.name ) < v }, 'val': int }
+            'name_len': { 'op': { 'lt': lambda i, v: len( i.name ) < v }, 'val': int }
         }
         self.log( 'should be 2 filters now' )
         self.assertEqual( len( self.filter_parser.fn_filter_parsers ), 1 )
@@ -700,7 +827,7 @@ class HistoryFiltersTestCase( BaseTestCase ):
         self.log( "negative offset should return full list" )
         self.assertEqual( self.history_manager.list( offset=-1 ), all_histories )
 
-        filters = [ model.History.deleted == True ]
+        filters = [ model.History.deleted == true() ]
         self.log( "orm filtered, no offset, no limit should work" )
         found = self.history_manager.list( filters=filters )
         self.assertEqual( found, [ history1, history2, history3 ] )
@@ -757,6 +884,10 @@ class HistoryFiltersTestCase( BaseTestCase ):
         self.log( "orm and fn filtered, negative offset should return full list" )
         found = self.history_manager.list( filters=filters, offset=-1 )
         self.assertEqual( found, deleted_and_annotated )
+
+    # TODO: eq, ge, le
+    # def test_ratings( self ):
+    #     pass
 
 
 # =============================================================================

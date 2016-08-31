@@ -4,12 +4,17 @@ A command line helper for common operations performed by Galaxy maintainers.
 Encodes and decodes IDs, returns Dataset IDs if provided an HDA or LDDA id,
 returns the disk path of a dataset.
 """
-
-import os, sys
+import os
+import sys
 from ConfigParser import ConfigParser
 from optparse import OptionParser
 
-default_config = os.path.abspath( os.path.join( os.path.dirname( __file__ ), '..', 'config/galaxy.ini') )
+sys.path.insert( 1, os.path.join( os.path.dirname( __file__ ), os.pardir, 'lib' ) )
+
+from galaxy.model import mapping
+from galaxy.web import security
+
+default_config = os.path.abspath( os.path.join( os.path.dirname( __file__ ), os.pardir, 'config/galaxy.ini') )
 
 parser = OptionParser()
 parser.add_option( '-c', '--config', dest='config', help='Path to Galaxy config file (config/galaxy.ini)', default=default_config )
@@ -26,21 +31,14 @@ except:
     sys.exit( 1 )
 
 options.config = os.path.abspath( options.config )
-sys.path.insert( 1, os.path.join( os.path.dirname( __file__ ), '..', 'lib' ) )
 
-from galaxy import eggs
-import pkg_resources
-
-config = ConfigParser( dict( file_path = 'database/files',
-                             id_secret = 'USING THE DEFAULT IS NOT SECURE!',
-                             database_connection = 'sqlite:///database/universe.sqlite?isolation_level=IMMEDIATE' ) )
+config = ConfigParser( dict( file_path='database/files',
+                             id_secret='USING THE DEFAULT IS NOT SECURE!',
+                             database_connection='sqlite:///database/universe.sqlite?isolation_level=IMMEDIATE' ) )
 config.read( options.config )
 
-from galaxy.web import security
-from galaxy.model import mapping
-
-helper = security.SecurityHelper( id_secret = config.get( 'app:main', 'id_secret' ) )
-model = mapping.init( config.get( 'app:main', 'file_path' ), config.get( 'app:main', 'database_connection' ), create_tables = False )
+helper = security.SecurityHelper( id_secret=config.get( 'app:main', 'id_secret' ) )
+model = mapping.init( config.get( 'app:main', 'file_path' ), config.get( 'app:main', 'database_connection' ), create_tables=False )
 
 if options.encode_id:
     print 'Encoded "%s": %s' % ( options.encode_id, helper.encode_id( options.encode_id ) )

@@ -1,7 +1,9 @@
+from __future__ import print_function
 import textwrap
 
 from base import api
 from .helpers import TestsDatasets
+
 
 class DatasetsApiTestCase( api.ApiTestCase, TestsDatasets ):
 
@@ -11,8 +13,8 @@ class DatasetsApiTestCase( api.ApiTestCase, TestsDatasets ):
 
     def test_index( self ):
         index_response = self._get( "datasets" )
-        print index_response
-        print dir( index_response )
+        print(index_response)
+        print(dir( index_response ))
         self._assert_status_code_is( index_response, 501 )
 
     def test_show( self ):
@@ -34,8 +36,8 @@ class DatasetsApiTestCase( api.ApiTestCase, TestsDatasets ):
         """ )
         hda1 = self._new_dataset( self.history_id, content=contents )
         display_response = self._get( "histories/%s/contents/%s/display" % ( self.history_id, hda1[ "id" ] ), {
-            'raw' : 'True'
+            'raw': 'True'
         })
         self._assert_status_code_is( display_response, 200 )
-        #TODO: doesn't work
-        #assert display_response.text == contents
+        # TODO: doesn't work
+        # assert display_response.text == contents

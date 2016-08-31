@@ -2,7 +2,7 @@
 Controller for integration with the Biostar application
 """
 
-from galaxy.web.base.controller import BaseUIController, url_for, error, web
+from galaxy.web.base.controller import BaseUIController, error, web
 from galaxy.util import biostar
 
 
@@ -19,7 +19,7 @@ class BiostarController( BaseUIController ):
         """
         try:
             url, payload = biostar.get_biostar_url( trans.app, payload=payload, biostar_action=biostar_action )
-        except Exception, e:
+        except Exception as e:
             return error( str( e ) )
         # Only create/log in biostar user if is registered Galaxy user
         if trans.user:
@@ -85,7 +85,7 @@ class BiostarController( BaseUIController ):
         try:
             error_reporter = biostar.BiostarErrorReporter( hda, trans.app )
             payload = error_reporter.send_report( trans.user, email=email, message=message )
-        except Exception, e:
+        except Exception as e:
             return error( str( e ) )
         return self.biostar_redirect( trans, payload=payload, biostar_action='new_post' )
 
@@ -96,7 +96,7 @@ class BiostarController( BaseUIController ):
         """
         try:
             url = biostar.biostar_log_out( trans )
-        except Exception, e:
+        except Exception as e:
             return error( str( e ) )
         if url:
             return trans.response.send_redirect( url )

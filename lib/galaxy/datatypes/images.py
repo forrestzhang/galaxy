@@ -2,16 +2,17 @@
 Image classes
 """
 
-import data
+import imghdr
 import logging
-from galaxy.datatypes.binary import Binary
-from galaxy.datatypes.metadata import MetadataElement
-from galaxy.datatypes import metadata
-from galaxy.datatypes.sniff import *
-from galaxy.datatypes.util.image_util import *
-from urllib import urlencode, quote_plus
 import zipfile
-import os, subprocess, tempfile, imghdr
+from urllib import quote_plus
+
+from galaxy.datatypes.binary import Binary
+from galaxy.datatypes.text import Html as HtmlFromText
+from galaxy.datatypes.sniff import get_headers
+from galaxy.datatypes.util.image_util import check_image_type
+from galaxy.util import nice_size
+from . import data
 
 try:
     import Image as PIL
@@ -36,15 +37,17 @@ log = logging.getLogger(__name__)
 
 class Image( data.Data ):
     """Class describing an image"""
+    edam_data = 'data_2968'
     edam_format = "format_3547"
 
     def set_peek( self, dataset, is_multi_byte=False ):
         if not dataset.dataset.purged:
             dataset.peek = 'Image in %s format' % dataset.extension
-            dataset.blurb = data.nice_size( dataset.get_size() )
+            dataset.blurb = nice_size( dataset.get_size() )
         else:
             dataset.peek = 'file does not exist'
             dataset.blurb = 'file purged from disk'
+
     def sniff( self, filename ):
         # First check if we can  use PIL
         if PIL is not None:
@@ -62,6 +65,7 @@ class Image( data.Data ):
 
 
 class Jpg( Image ):
+    edam_format = "format_3579"
     file_ext = "jpg"
 
     def sniff(self, filename, image=None):
@@ -70,6 +74,7 @@ class Jpg( Image ):
 
 
 class Png( Image ):
+    edam_format = "format_3603"
     file_ext = "png"
 
     def sniff(self, filename, image=None):
@@ -78,6 +83,7 @@ class Png( Image ):
 
 
 class Tiff( Image ):
+    edam_format = "format_3591"
     file_ext = "tiff"
 
     def sniff(self, filename, image=None):
@@ -86,6 +92,7 @@ class Tiff( Image ):
 
 
 class Bmp( Image ):
+    edam_format = "format_3592"
     file_ext = "bmp"
 
     def sniff(self, filename, image=None):
@@ -103,6 +110,7 @@ class Gif( Image ):
 
 
 class Im( Image ):
+    edam_format = "format_3593"
     file_ext = "im"
 
     def sniff(self, filename, image=None):
@@ -111,6 +119,7 @@ class Im( Image ):
 
 
 class Pcd( Image ):
+    edam_format = "format_3594"
     file_ext = "pcd"
 
     def sniff(self, filename, image=None):
@@ -119,6 +128,7 @@ class Pcd( Image ):
 
 
 class Pcx( Image ):
+    edam_format = "format_3595"
     file_ext = "pcx"
 
     def sniff(self, filename, image=None):
@@ -127,6 +137,7 @@ class Pcx( Image ):
 
 
 class Ppm( Image ):
+    edam_format = "format_3596"
     file_ext = "ppm"
 
     def sniff(self, filename, image=None):
@@ -135,6 +146,7 @@ class Ppm( Image ):
 
 
 class Psd( Image ):
+    edam_format = "format_3597"
     file_ext = "psd"
 
     def sniff(self, filename, image=None):
@@ -143,6 +155,7 @@ class Psd( Image ):
 
 
 class Xbm( Image ):
+    edam_format = "format_3598"
     file_ext = "xbm"
 
     def sniff(self, filename, image=None):
@@ -151,6 +164,7 @@ class Xbm( Image ):
 
 
 class Xpm( Image ):
+    edam_format = "format_3599"
     file_ext = "xpm"
 
     def sniff(self, filename, image=None):
@@ -159,6 +173,7 @@ class Xpm( Image ):
 
 
 class Rgb( Image ):
+    edam_format = "format_3600"
     file_ext = "rgb"
 
     def sniff(self, filename, image=None):
@@ -167,6 +182,7 @@ class Rgb( Image ):
 
 
 class Pbm( Image ):
+    edam_format = "format_3601"
     file_ext = "pbm"
 
     def sniff(self, filename, image=None):
@@ -175,6 +191,7 @@ class Pbm( Image ):
 
 
 class Pgm( Image ):
+    edam_format = "format_3602"
     file_ext = "pgm"
 
     def sniff(self, filename, image=None):
@@ -192,6 +209,7 @@ class Eps( Image ):
 
 
 class Rast( Image ):
+    edam_format = "format_3605"
     file_ext = "rast"
 
     def sniff(self, filename, image=None):
@@ -216,6 +234,7 @@ class Pdf( Image ):
 
 Binary.register_sniffable_binary_format("pdf", "pdf", Pdf)
 
+
 def create_applet_tag_peek( class_name, archive, params ):
     text = """
 <object classid="java:%s"
@@ -236,21 +255,23 @@ def create_applet_tag_peek( class_name, archive, params ):
 """
     return """<div><p align="center">%s</p></div>""" % text
 
+
 class Gmaj( data.Data ):
     """Class describing a GMAJ Applet"""
     edam_format = "format_3547"
     file_ext = "gmaj.zip"
     copy_safe_peek = False
+
     def set_peek( self, dataset, is_multi_byte=False ):
         if not dataset.dataset.purged:
             if hasattr( dataset, 'history_id' ):
                 params = {
-                "bundle":"display?id=%s&tofile=yes&toext=.zip" % dataset.id,
-                "buttonlabel": "Launch GMAJ",
-                "nobutton": "false",
-                "urlpause" :"100",
-                "debug": "false",
-                "posturl": "history_add_to?%s" % "&".join( map( lambda x: "%s=%s" % ( x[0], quote_plus( str( x[1] ) ) ), [ ( 'copy_access_from', dataset.id), ( 'history_id', dataset.history_id ), ( 'ext', 'maf' ), ( 'name', 'GMAJ Output on data %s' % dataset.hid ), ( 'info', 'Added by GMAJ' ), ( 'dbkey', dataset.dbkey ) ] ) )
+                    "bundle": "display?id=%s&tofile=yes&toext=.zip" % dataset.id,
+                    "buttonlabel": "Launch GMAJ",
+                    "nobutton": "false",
+                    "urlpause": "100",
+                    "debug": "false",
+                    "posturl": "history_add_to?%s" % "&".join( map( lambda x: "%s=%s" % ( x[0], quote_plus( str( x[1] ) ) ), [ ( 'copy_access_from', dataset.id), ( 'history_id', dataset.history_id ), ( 'ext', 'maf' ), ( 'name', 'GMAJ Output on data %s' % dataset.hid ), ( 'info', 'Added by GMAJ' ), ( 'dbkey', dataset.dbkey ) ] ) )
                 }
                 class_name = "edu.psu.bx.gmaj.MajApplet.class"
                 archive = "/static/gmaj/gmaj.jar"
@@ -262,14 +283,17 @@ class Gmaj( data.Data ):
         else:
             dataset.peek = 'file does not exist'
             dataset.blurb = 'file purged from disk'
+
     def display_peek(self, dataset):
         try:
             return dataset.peek
         except:
             return "peek unavailable"
+
     def get_mime(self):
         """Returns the mime type of the datatype"""
         return 'application/zip'
+
     def sniff(self, filename):
         """
         NOTE: the sniff.convert_newlines() call in the upload utility will keep Gmaj data types from being
@@ -289,40 +313,11 @@ class Gmaj( data.Data ):
             return False
         return True
 
-class Html( data.Text ):
-    """Class describing an html file"""
-    edam_format = "format_2331"
-    file_ext = "html"
 
-    def set_peek( self, dataset, is_multi_byte=False ):
-        if not dataset.dataset.purged:
-            dataset.peek = "HTML file"
-            dataset.blurb = data.nice_size( dataset.get_size() )
-        else:
-            dataset.peek = 'file does not exist'
-            dataset.blurb = 'file purged from disk'
-    def get_mime(self):
-        """Returns the mime type of the datatype"""
-        return 'text/html'
-    def sniff( self, filename ):
-        """
-        Determines whether the file is in html format
+class Html( HtmlFromText ):
+    """Deprecated class. This class should not be used anymore, but the galaxy.datatypes.text:Html one.
+    This is for backwards compatibilities only."""
 
-        >>> fname = get_test_fname( 'complete.bed' )
-        >>> Html().sniff( fname )
-        False
-        >>> fname = get_test_fname( 'file.html' )
-        >>> Html().sniff( fname )
-        True
-        """
-        headers = get_headers( filename, None )
-        try:
-            for i, hdr in enumerate(headers):
-                if hdr and hdr[0].lower().find( '<html>' ) >=0:
-                    return True
-            return False
-        except:
-            return True
 
 class Laj( data.Text ):
     """Class describing a LAJ Applet"""
@@ -333,11 +328,11 @@ class Laj( data.Text ):
         if not dataset.dataset.purged:
             if hasattr( dataset, 'history_id' ):
                 params = {
-                "alignfile1": "display?id=%s" % dataset.id,
-                "buttonlabel": "Launch LAJ",
-                "title": "LAJ in Galaxy",
-                "posturl": quote_plus( "history_add_to?%s" % "&".join( [ "%s=%s" % ( key, value ) for key, value in { 'history_id': dataset.history_id, 'ext': 'lav', 'name': 'LAJ Output', 'info': 'Added by LAJ', 'dbkey': dataset.dbkey, 'copy_access_from': dataset.id }.items() ] ) ),
-                "noseq": "true"
+                    "alignfile1": "display?id=%s" % dataset.id,
+                    "buttonlabel": "Launch LAJ",
+                    "title": "LAJ in Galaxy",
+                    "posturl": quote_plus( "history_add_to?%s" % "&".join( [ "%s=%s" % ( key, value ) for key, value in { 'history_id': dataset.history_id, 'ext': 'lav', 'name': 'LAJ Output', 'info': 'Added by LAJ', 'dbkey': dataset.dbkey, 'copy_access_from': dataset.id }.items() ] ) ),
+                    "noseq": "true"
                 }
                 class_name = "edu.psu.cse.bio.laj.LajApplet.class"
                 archive = "/static/laj/laj.jar"
@@ -348,6 +343,7 @@ class Laj( data.Text ):
         else:
             dataset.peek = 'file does not exist'
             dataset.blurb = 'file purged from disk'
+
     def display_peek(self, dataset):
         try:
             return dataset.peek

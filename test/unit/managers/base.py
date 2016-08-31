@@ -4,15 +4,14 @@ from __future__ import print_function
 
 import os
 import imp
-
 import json
+
+from six import string_types
 
 test_utils = imp.load_source( 'test_utils',
     os.path.join( os.path.dirname( __file__), '../unittest_utils/utility.py' ) )
 import galaxy_mock
 
-from galaxy import eggs
-eggs.require( 'SQLAlchemy >= 0.4' )
 import sqlalchemy
 
 from galaxy.managers.users import UserManager
@@ -62,7 +61,7 @@ class BaseTestCase( test_utils.unittest.TestCase ):
         print( *args, **kwargs )
 
     # ---- additional test types
-    TYPES_NEEDING_NO_SERIALIZERS = ( basestring, bool, type( None ), int, float )
+    TYPES_NEEDING_NO_SERIALIZERS = ( string_types, bool, type( None ), int, float )
 
     def assertKeys( self, obj, key_list ):
         self.assertEqual( sorted( obj.keys() ), sorted( key_list ) )
@@ -75,13 +74,13 @@ class BaseTestCase( test_utils.unittest.TestCase ):
             self.assertTrue( True, 'keys found in object' )
 
     def assertNullableBasestring( self, item ):
-        if not isinstance( item, ( basestring, type( None ) ) ):
+        if not isinstance( item, ( string_types, type( None ) ) ):
             self.fail( 'Non-nullable basestring: ' + str( type( item ) ) )
         # TODO: len mod 8 and hex re
         self.assertTrue( True, 'is nullable basestring: ' + str( item ) )
 
     def assertEncodedId( self, item ):
-        if not isinstance( item, basestring ):
+        if not isinstance( item, string_types ):
             self.fail( 'Non-string: ' + str( type( item ) ) )
         # TODO: len mod 8 and hex re
         self.assertTrue( True, 'is id: ' + item )
@@ -93,14 +92,14 @@ class BaseTestCase( test_utils.unittest.TestCase ):
             self.assertEncodedId( item )
 
     def assertDate( self, item ):
-        if not isinstance( item, basestring ):
+        if not isinstance( item, string_types ):
             self.fail( 'Non-string: ' + str( type( item ) ) )
         # TODO: no great way to parse this fully (w/o python-dateutil)
         # TODO: re?
         self.assertTrue( True, 'is date: ' + item )
 
     def assertUUID( self, item ):
-        if not isinstance( item, basestring ):
+        if not isinstance( item, string_types ):
             self.fail( 'Non-string: ' + str( type( item ) ) )
         # TODO: re for d4d76d69-80d4-4ed7-80c7-211ebcc1a358
         self.assertTrue( True, 'is uuid: ' + item )
@@ -117,7 +116,22 @@ class BaseTestCase( test_utils.unittest.TestCase ):
 
     def assertIsJsonifyable( self, item ):
         # TODO: use galaxy's override
-        self.assertIsInstance( json.dumps( item ), basestring )
+        self.assertIsInstance( json.dumps( item ), string_types )
+
+
+class CreatesCollectionsMixin( object ):
+
+    def build_element_identifiers( self, elements ):
+        identifier_list = []
+        for element in elements:
+            src = 'hda'
+            # if isinstance( element, model.DatasetCollection ):
+            #    src = 'collection'#?
+            # elif isinstance( element, model.LibraryDatasetDatasetAssociation ):
+            #    src = 'ldda'#?
+            encoded_id = self.trans.security.encode_id( element.id )
+            identifier_list.append( dict( src=src, name=element.name, id=encoded_id ) )
+        return identifier_list
 
 
 # =============================================================================

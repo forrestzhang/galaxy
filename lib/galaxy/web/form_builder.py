@@ -1,27 +1,31 @@
 """
 Classes for generating HTML forms
 """
+import os
+import time
+import logging
 
-import logging, sys, os, time
-
+from six import string_types
 from operator import itemgetter
 from cgi import escape
 from galaxy.util import restore_text, relpath, nice_size, unicodify
-from galaxy.util.json import dumps
 from galaxy.web import url_for
 from binascii import hexlify
 
 log = logging.getLogger(__name__)
 
+
 class BaseField(object):
     def get_html( self, prefix="" ):
         """Returns the html widget corresponding to the parameter"""
         raise TypeError( "Abstract Method" )
+
     def get_disabled_str( self, disabled=False ):
         if disabled:
             return ' disabled="disabled"'
         else:
             return ''
+
 
 class TextField(BaseField):
     """
@@ -36,15 +40,16 @@ class TextField(BaseField):
         self.name = name
         self.size = int( size or 10 )
         self.value = value or ""
+
     def get_html( self, prefix="", disabled=False ):
         value = self.value
-        if not isinstance( value, basestring ):
-            value = str( value )
         value = unicodify( value )
-        return unicodify( '<input type="text" name="%s%s" size="%d" value="%s"%s>' \
-            % ( prefix, self.name, self.size, escape( value,  quote=True ), self.get_disabled_str( disabled ) ) )
+        return unicodify( '<input type="text" name="%s%s" size="%d" value="%s"%s>'
+                          % ( prefix, self.name, self.size, escape( value, quote=True ), self.get_disabled_str( disabled ) ) )
+
     def set_size(self, size):
         self.size = int( size )
+
 
 class PasswordField(BaseField):
     """
@@ -59,11 +64,14 @@ class PasswordField(BaseField):
         self.name = name
         self.size = int( size or 10 )
         self.value = value or ""
+
     def get_html( self, prefix="", disabled=False  ):
-        return unicodify( '<input type="password" name="%s%s" size="%d" value="%s"%s>' \
-            % ( prefix, self.name, self.size, escape( str( self.value ), quote=True ), self.get_disabled_str( disabled ) ) )
+        return unicodify( '<input type="password" name="%s%s" size="%d" value="%s"%s>'
+                          % ( prefix, self.name, self.size, escape( str( self.value ), quote=True ), self.get_disabled_str( disabled ) ) )
+
     def set_size(self, size):
         self.size = int( size )
+
 
 class TextArea(BaseField):
     """
@@ -75,6 +83,7 @@ class TextArea(BaseField):
     <textarea name="bins" rows="4" cols="5">default</textarea>
     """
     _DEFAULT_SIZE = "5x25"
+
     def __init__( self, name, size=None, value=None ):
         self.name = name
         size = size or self._DEFAULT_SIZE
@@ -82,25 +91,29 @@ class TextArea(BaseField):
         self.rows = int(self.size[0])
         self.cols = int(self.size[-1])
         self.value = value or ""
+
     def get_html( self, prefix="", disabled=False ):
-        return unicodify( '<textarea name="%s%s" rows="%d" cols="%d"%s>%s</textarea>' \
-            % ( prefix, self.name, self.rows, self.cols, self.get_disabled_str( disabled ), escape( str( self.value ), quote=True ) ) )
+        return unicodify( '<textarea name="%s%s" rows="%d" cols="%d"%s>%s</textarea>'
+                          % ( prefix, self.name, self.rows, self.cols, self.get_disabled_str( disabled ), escape( str( self.value ), quote=True ) ) )
+
     def set_size(self, rows, cols):
         self.rows = rows
         self.cols = cols
+
 
 class CheckboxField(BaseField):
     """
     A checkbox (boolean input)
 
     >>> print CheckboxField( "foo" ).get_html()
-    <input type="checkbox" id="foo" name="foo" value="true"><input type="hidden" name="foo" value="true">
+    <input type="checkbox" id="foo" name="foo" value="__CHECKED__"><input type="hidden" name="foo" value="__NOTHING__">
     >>> print CheckboxField( "bar", checked="yes" ).get_html()
-    <input type="checkbox" id="bar" name="bar" value="true" checked="checked"><input type="hidden" name="bar" value="true">
+    <input type="checkbox" id="bar" name="bar" value="__CHECKED__" checked="checked"><input type="hidden" name="bar" value="__NOTHING__">
     """
-    def __init__( self, name, checked=None, refresh_on_change = False, refresh_on_change_values = None ):
+
+    def __init__( self, name, checked=None, refresh_on_change=False, refresh_on_change_values=None ):
         self.name = name
-        self.checked = ( checked == True ) or ( isinstance( checked, basestring ) and ( checked.lower() in ( "yes", "true", "on" ) ) )
+        self.checked = ( checked is True ) or ( isinstance( checked, string_types ) and ( checked.lower() in ( "yes", "true", "on" ) ) )
         self.refresh_on_change = refresh_on_change
         self.refresh_on_change_values = refresh_on_change_values or []
         if self.refresh_on_change:
@@ -109,33 +122,28 @@ class CheckboxField(BaseField):
                 self.refresh_on_change_text = '%s refresh_on_change_values="%s" ' % ( self.refresh_on_change_text, ",".join( self.refresh_on_change_values ) )
         else:
             self.refresh_on_change_text = ''
+
     def get_html( self, prefix="", disabled=False ):
         if self.checked:
             checked_text = ' checked="checked"'
         else:
-            checked_text = ""
+            checked_text = ''
         id_name = prefix + self.name
-        # The hidden field is necessary because if the check box is not checked on the form, it will
-        # not be included in the request params.  The hidden field ensure that this will happen.  When
-        # parsing the request, the value 'true' in the hidden field actually means it is NOT checked.
-        # See the is_checked() method below.  The prefix is necessary in each case to ensure functional
-        # correctness when the param is inside a conditional.
-        return unicodify( '<input type="checkbox" id="%s" name="%s" value="true"%s%s%s><input type="hidden" name="%s%s" value="true"%s>' \
-            % ( id_name, id_name, checked_text, self.get_disabled_str( disabled ), self.refresh_on_change_text, prefix, self.name, self.get_disabled_str( disabled ) ) )
+        return unicodify( '<input type="checkbox" id="%s" name="%s" value="__CHECKED__"%s%s%s><input type="hidden" name="%s" value="__NOTHING__"%s>'
+                          % ( id_name, id_name, checked_text, self.get_disabled_str( disabled ), self.refresh_on_change_text, id_name, self.get_disabled_str( disabled ) ) )
+
     @staticmethod
     def is_checked( value ):
-        if value == True:
+        if value is True:
             return True
-        # This may look strange upon initial inspection, but see the comments in the get_html() method
-        # above for clarification.  Basically, if value is not True, then it will always be a list with
-        # 2 input fields ( a checkbox and a hidden field ) if the checkbox is checked.  If it is not
-        # checked, then value will be only the hidden field.
-        return isinstance( value, list ) and len( value ) == 2
+        return isinstance( value, list ) and ( '__CHECKED__' in value or len( value ) == 2 )
+
     def set_checked(self, value):
-        if isinstance( value, basestring ):
+        if isinstance( value, string_types ):
             self.checked = value.lower() in [ "yes", "true", "on" ]
         else:
             self.checked = value
+
 
 class FileField(BaseField):
     """
@@ -146,18 +154,21 @@ class FileField(BaseField):
     >>> print FileField( "foo", ajax = True ).get_html()
     <input type="file" name="foo" galaxy-ajax-upload="true">
     """
-    def __init__( self, name, value = None, ajax=False ):
+
+    def __init__( self, name, value=None, ajax=False ):
         self.name = name
         self.ajax = ajax
         self.value = value
+
     def get_html( self, prefix="" ):
         value_text = ""
         if self.value:
-            value_text = ' value="%s"' % escape( str( self.value ),  quote=True )
+            value_text = ' value="%s"' % escape( str( self.value ), quote=True )
         ajax_text = ""
         if self.ajax:
             ajax_text = ' galaxy-ajax-upload="true"'
         return unicodify( '<input type="file" name="%s%s"%s%s>' % ( prefix, self.name, ajax_text, value_text ) )
+
 
 class FTPFileField(BaseField):
     """
@@ -193,11 +204,13 @@ class FTPFileField(BaseField):
             </tbody>
         </table>
     '''
-    def __init__( self, name, dir, ftp_site, value = None ):
+
+    def __init__( self, name, dir, ftp_site, value=None ):
         self.name = name
         self.dir = dir
         self.ftp_site = ftp_site
         self.value = value
+
     def get_html( self, prefix="" ):
         rval = FTPFileField.thead
         if self.dir is None:
@@ -222,6 +235,7 @@ class FTPFileField(BaseField):
         rval += '<div class="toolParamHelp">This Galaxy server allows you to upload files via FTP.  To upload some files, log in to the FTP server at <strong>%s</strong> using your Galaxy credentials (email address and password).</div>' % self.ftp_site
         return rval
 
+
 class HiddenField(BaseField):
     """
     A hidden field.
@@ -232,8 +246,10 @@ class HiddenField(BaseField):
     def __init__( self, name, value=None ):
         self.name = name
         self.value = value or ""
+
     def get_html( self, prefix="" ):
         return unicodify( '<input type="hidden" name="%s%s" value="%s">' % ( prefix, self.name, escape( str( self.value ), quote=True ) ) )
+
 
 class SelectField(BaseField):
     """
@@ -272,8 +288,9 @@ class SelectField(BaseField):
     <div><input type="checkbox" name="bar" value="3" id="bar|3"><label class="inline" for="bar|3">automatic</label></div>
     <div><input type="checkbox" name="bar" value="4" id="bar|4" checked='checked'><label class="inline" for="bar|4">bazooty</label></div>
     """
-    def __init__( self, name, multiple=None, display=None, refresh_on_change=False, refresh_on_change_values=None, size=None ):
+    def __init__( self, name, multiple=None, display=None, refresh_on_change=False, refresh_on_change_values=None, size=None, field_id=None ):
         self.name = name
+        self.field_id = field_id
         self.multiple = multiple or False
         self.size = size
         self.options = list()
@@ -282,7 +299,7 @@ class SelectField(BaseField):
         elif display == "radio":
             assert not( multiple ), "Radio display only supported for single select"
         elif display is not None:
-            raise Exception, "Unknown display type: %s" % display
+            raise Exception( "Unknown display type: %s" % display )
         self.display = display
         self.refresh_on_change = refresh_on_change
         self.refresh_on_change_values = refresh_on_change_values or []
@@ -292,26 +309,29 @@ class SelectField(BaseField):
                 self.refresh_on_change_text = '%s refresh_on_change_values="%s"' % ( self.refresh_on_change_text, escape( ",".join( self.refresh_on_change_values ), quote=True ) )
         else:
             self.refresh_on_change_text = ''
-    def add_option( self, text, value, selected = False ):
+
+    def add_option( self, text, value, selected=False ):
         self.options.append( ( text, value, selected ) )
-    def get_html( self, prefix="", disabled=False ):
+
+    def get_html( self, prefix="", disabled=False, extra_attr=None ):
+        if extra_attr is not None:
+            self.extra_attributes = ' %s' % ' '.join( [ '%s="%s"' % ( k, escape( v ) ) for k, v in extra_attr.items() ] )
+        else:
+            self.extra_attributes = ''
         if self.display == "checkboxes":
             return self.get_html_checkboxes( prefix, disabled )
         elif self.display == "radio":
             return self.get_html_radio( prefix, disabled )
         else:
             return self.get_html_default( prefix, disabled )
+
     def get_html_checkboxes( self, prefix="", disabled=False ):
         rval = []
         ctr = 0
         if len( self.options ) > 1:
-            rval.append ( '<div class="checkUncheckAllPlaceholder" checkbox_name="%s%s"></div>' % ( prefix, self.name ) ) #placeholder for the insertion of the Select All/Unselect All buttons
+            rval.append( '<div class="checkUncheckAllPlaceholder" checkbox_name="%s%s"></div>' % ( prefix, self.name ) )  # placeholder for the insertion of the Select All/Unselect All buttons
         for text, value, selected in self.options:
             style = ""
-            if not isinstance( value, basestring ):
-                value = str( value )
-            if not isinstance( text, basestring ):
-                text = str( text )
             text = unicodify( text )
             escaped_value = escape( unicodify( value ), quote=True )
             uniq_id = "%s%s|%s" % (prefix, self.name, escaped_value)
@@ -320,10 +340,11 @@ class SelectField(BaseField):
             selected_text = ""
             if selected:
                 selected_text = " checked='checked'"
-            rval.append( '<div%s><input type="checkbox" name="%s%s" value="%s" id="%s"%s%s><label class="inline" for="%s">%s</label></div>' % \
-                ( style, prefix, self.name, escaped_value, uniq_id, selected_text, self.get_disabled_str( disabled ), uniq_id, escape( text, quote=True ) ) )
+            rval.append( '<div%s><input type="checkbox" name="%s%s" value="%s" id="%s"%s%s%s><label class="inline" for="%s">%s</label></div>'
+                         % ( style, prefix, self.name, escaped_value, uniq_id, selected_text, self.get_disabled_str( disabled ), self.extra_attributes, uniq_id, escape( text, quote=True ) ) )
             ctr += 1
         return unicodify( "\n".join( rval ) )
+
     def get_html_radio( self, prefix="", disabled=False ):
         rval = []
         ctr = 0
@@ -336,19 +357,21 @@ class SelectField(BaseField):
             selected_text = ""
             if selected:
                 selected_text = " checked='checked'"
-            rval.append( '<div%s><input type="radio" name="%s%s"%s value="%s" id="%s"%s%s><label class="inline" for="%s">%s</label></div>' % \
-                         ( style,
-                           prefix,
-                           self.name,
-                           self.refresh_on_change_text,
-                           escaped_value,
-                           uniq_id,
-                           selected_text,
-                           self.get_disabled_str( disabled ),
-                           uniq_id,
-                           text ) )
+            rval.append( '<div%s><input type="radio" name="%s%s"%s value="%s" id="%s"%s%s%s><label class="inline" for="%s">%s</label></div>'
+                         % ( style,
+                             prefix,
+                             self.name,
+                             self.refresh_on_change_text,
+                             escaped_value,
+                             uniq_id,
+                             selected_text,
+                             self.get_disabled_str( disabled ),
+                             self.extra_attributes,
+                             uniq_id,
+                             text ) )
             ctr += 1
         return unicodify( "\n".join( rval ) )
+
     def get_html_default( self, prefix="", disabled=False ):
         if self.multiple:
             multiple = " multiple"
@@ -364,21 +387,22 @@ class SelectField(BaseField):
             if selected:
                 selected_text = " selected"
                 last_selected_value = value
-                if not isinstance( last_selected_value, basestring ):
+                if not isinstance( last_selected_value, string_types ):
                     last_selected_value = str( last_selected_value )
             else:
                 selected_text = ""
-            if not isinstance( value, basestring ):
-                value = str( value )
-            if not isinstance( text, basestring ):
-                text = str( text )
             rval.append( '<option value="%s"%s>%s</option>' % ( escape( unicodify( value ), quote=True ), selected_text, escape( unicodify( text ), quote=True ) ) )
         if last_selected_value:
             last_selected_value = ' last_selected_value="%s"' % escape( unicodify( last_selected_value ), quote=True )
-        rval.insert( 0, '<select name="%s%s"%s%s%s%s%s>' % \
-                     ( prefix, self.name, multiple, size, self.refresh_on_change_text, last_selected_value, self.get_disabled_str( disabled ) ) )
+        if self.field_id is not None:
+            id_string = ' id="%s"' % self.field_id
+        else:
+            id_string = ''
+        rval.insert( 0, '<select name="%s%s"%s%s%s%s%s%s%s>'
+                     % ( prefix, self.name, multiple, size, self.refresh_on_change_text, last_selected_value, self.get_disabled_str( disabled ), id_string, self.extra_attributes ) )
         rval.append( '</select>' )
         return unicodify( "\n".join( rval ) )
+
     def get_selected( self, return_label=False, return_value=False, multi=False ):
         '''
         Return the currently selected option's label, value or both as a tuple.  For
@@ -482,7 +506,8 @@ class DrillDownField( BaseField ):
     </div>
     </div>
     """
-    def __init__( self, name, multiple=None, display=None, refresh_on_change=False, options = [], value = [], refresh_on_change_values = [] ):
+
+    def __init__( self, name, multiple=None, display=None, refresh_on_change=False, options=[], value=[], refresh_on_change_values=[] ):
         self.name = name
         self.multiple = multiple or False
         self.options = options
@@ -496,7 +521,7 @@ class DrillDownField( BaseField ):
         elif display == "radio":
             assert not( multiple ), "Radio display only supported for single select"
         else:
-            raise Exception, "Unknown display type: %s" % display
+            raise Exception( "Unknown display type: %s" % display )
         self.display = display
         self.refresh_on_change = refresh_on_change
         self.refresh_on_change_values = refresh_on_change_values
@@ -506,15 +531,17 @@ class DrillDownField( BaseField ):
                 self.refresh_on_change_text = '%s refresh_on_change_values="%s"' % ( self.refresh_on_change_text, ",".join( self.refresh_on_change_values ) )
         else:
             self.refresh_on_change_text = ''
+
     def get_html( self, prefix="" ):
-        def find_expanded_options( expanded_options, options, parent_options = [] ):
+        def find_expanded_options( expanded_options, options, parent_options=[] ):
             for option in options:
                 if option['value'] in self.value:
                     expanded_options.extend( parent_options )
                 if option['options']:
                     new_parents = list( parent_options ) + [ option['value'] ]
                     find_expanded_options( expanded_options, option['options'], new_parents )
-        def recurse_options( html, options, base_id, expanded_options = [] ):
+
+        def recurse_options( html, options, base_id, expanded_options=[] ):
             for option in options:
                 escaped_option_value = escape( str( option['value'] ), quote=True )
                 selected = ( option['value'] in self.value )
@@ -545,59 +572,26 @@ class DrillDownField( BaseField ):
         return unicodify( '\n'.join( rval ) )
 
 
-class SwitchingSelectField(BaseField):
-
-    def __init__( self, delegate_fields, default_field=None ):
-        self.delegate_fields = delegate_fields
-        self.default_field = default_field or delegate_fields.keys()[ 0 ]
-
-    @property
-    def primary_field( self ):
-        primary_field = self.delegate_fields[ self.delegate_fields.keys()[ 0 ] ]
-        return primary_field
-
-    def get_html( self, prefix="", disabled=False ):
-        primary_field = self.primary_field
-        html = '<div class="switch-option">'
-        html += primary_field.get_html( prefix=prefix, disabled=disabled )
-        html += '<input name="__switch_default__" type="hidden" value="%s" />' % self.default_field
-        options = []
-        for name, delegate_field in self.delegate_fields.items():
-            field = escape( dumps( delegate_field.to_dict() ) )
-            option = " '%s': %s" % ( name, field )
-            options.append( option )
-        html += '<script>$(document).ready( function() {\nvar switchOptions = {\n'
-        html += ','.join( options )
-        html += '};\n'
-        html += 'if ( window.enhanced_galaxy_tools ) {\n'
-        html += 'require( [ "galaxy.tools" ], function( mod_tools ) { new mod_tools.SwitchSelectView({\n'
-        html += 'el: $(\'[name="%s%s"]\').closest( "div.switch-option" ),' % ( prefix, primary_field.name )
-        html += 'default_option: "%s",\n' % self.default_field
-        html += 'prefix: "%s",\n' % prefix
-        html += 'switch_options: switchOptions }); } )\n'
-        html += "}"
-        html += '});\n</script></div>'
-        return html
-
-
 class AddressField(BaseField):
     @staticmethod
     def fields():
-        return   [  ( "short_desc", "Short address description", "Required" ),
-                    ( "name", "Name", "Required" ),
-                    ( "institution", "Institution", "Required" ),
-                    ( "address", "Address", "Required" ),
-                    ( "city", "City", "Required" ),
-                    ( "state", "State/Province/Region", "Required" ),
-                    ( "postal_code", "Postal Code", "Required" ),
-                    ( "country", "Country", "Required" ),
-                    ( "phone", "Phone", "" )  ]
+        return [  ( "short_desc", "Short address description", "Required" ),
+                  ( "name", "Name", "Required" ),
+                  ( "institution", "Institution", "Required" ),
+                  ( "address", "Address", "Required" ),
+                  ( "city", "City", "Required" ),
+                  ( "state", "State/Province/Region", "Required" ),
+                  ( "postal_code", "Postal Code", "Required" ),
+                  ( "country", "Country", "Required" ),
+                  ( "phone", "Phone", "" )  ]
+
     def __init__(self, name, user=None, value=None, params=None):
         self.name = name
         self.user = user
         self.value = value
         self.select_address = None
         self.params = params
+
     def get_html( self, disabled=False ):
         address_html = ''
         add_ids = ['none']
@@ -629,8 +623,8 @@ class AddressField(BaseField):
             self.select_address.add_option( 'Add a new address', 'new', selected=True )
             for field_name, label, help_text in self.fields():
                 add_field = TextField( self.name + '_' + field_name,
-                                      40,
-                                      restore_text( self.params.get( self.name + '_' + field_name, ''  ) ) )
+                                       40,
+                                       restore_text( self.params.get( self.name + '_' + field_name, ''  ) ) )
                 address_html += '''
                                 <div class="form-row">
                                     <label>%s</label>
@@ -649,6 +643,7 @@ class AddressField(BaseField):
             self.select_address.add_option( 'Add a new address', 'new' )
         return self.select_address.get_html( disabled=disabled ) + address_html
 
+
 class WorkflowField( BaseField ):
     def __init__( self, name, user=None, value=None, params=None ):
         self.name = name
@@ -656,6 +651,7 @@ class WorkflowField( BaseField ):
         self.value = value
         self.select_workflow = None
         self.params = params
+
     def get_html( self, disabled=False ):
         self.select_workflow = SelectField( self.name )
         if self.value == 'none':
@@ -671,6 +667,7 @@ class WorkflowField( BaseField ):
                         self.select_workflow.add_option( a.name, str( a.id ) )
         return self.select_workflow.get_html( disabled=disabled )
 
+
 class WorkflowMappingField( BaseField):
     def __init__( self, name, user=None, value=None, params=None, **kwd ):
         # DBTODO integrate this with the new __build_workflow approach in requests_common.  As it is, not particularly useful.
@@ -680,8 +677,9 @@ class WorkflowMappingField( BaseField):
         self.select_workflow = None
         self.params = params
         self.workflow_inputs = []
+
     def get_html( self, disabled=False ):
-        self.select_workflow = SelectField( self.name, refresh_on_change = True )
+        self.select_workflow = SelectField( self.name, refresh_on_change=True )
         workflow_inputs = []
         if self.value == 'none':
             self.select_workflow.add_option( 'Select one', 'none', selected=True )
@@ -704,11 +702,14 @@ class WorkflowMappingField( BaseField):
                                     workflow_inputs.append((step.tool_inputs['name'], TextField( '%s_%s' % (self.name, step.id), 20)))
         # Do something more appropriate here and allow selection of inputs
         return self.select_workflow.get_html( disabled=disabled ) + ''.join(['<div class="form-row"><label>%s</label>%s</div>' % (s[0], s[1].get_html()) for s in workflow_inputs])
+
     def get_display_text(self):
         if self.value:
             return self.value
         else:
             return '-'
+
+
 class HistoryField( BaseField ):
     def __init__( self, name, user=None, value=None, params=None ):
         self.name = name
@@ -716,6 +717,7 @@ class HistoryField( BaseField ):
         self.value = value
         self.select_history = None
         self.params = params
+
     def get_html( self, disabled=False ):
         self.select_history = SelectField( self.name )
         if self.value == 'none':
@@ -735,24 +737,27 @@ class HistoryField( BaseField ):
                     else:
                         self.select_history.add_option( a.name, str( a.id ) )
         return self.select_history.get_html( disabled=disabled )
+
     def get_display_text(self):
         if self.value:
             return self.value
         else:
             return '-'
 
+
 class LibraryField( BaseField ):
     def __init__( self, name, value=None, trans=None ):
         self.name = name
         self.lddas = value
         self.trans = trans
+
     def get_html( self, prefix="", disabled=False ):
         if not self.lddas:
             ldda_ids = ""
             text = "Select library dataset(s)"
         else:
             ldda_ids = "||".join( [ self.trans.security.encode_id( ldda.id ) for ldda in self.lddas ] )
-            text = "<br />".join( [ "%s. %s" % (i+1, ldda.name) for i, ldda in enumerate(self.lddas)] )
+            text = "<br />".join( [ "%s. %s" % (i + 1, ldda.name) for i, ldda in enumerate(self.lddas)] )
         return unicodify( '<a href="javascript:void(0);" class="add-librarydataset">%s</a> \
                 <input type="hidden" name="%s%s" value="%s">' % ( text, prefix, self.name, escape( str(ldda_ids), quote=True ) ) )
 
@@ -762,14 +767,16 @@ class LibraryField( BaseField ):
         else:
             return 'None'
 
+
 def get_suite():
     """Get unittest suite for this module"""
-    import doctest, sys
+    import doctest
+    import sys
     return doctest.DocTestSuite( sys.modules[__name__] )
 
-# --------- Utility methods -----------------------------
 
-def build_select_field( trans, objs, label_attr,  select_field_name, initial_value='none',
+# --------- Utility methods -----------------------------
+def build_select_field( trans, objs, label_attr, select_field_name, initial_value='none',
                         selected_value='none', refresh_on_change=False, multiple=False, display=None, size=None ):
     """
     Build a SelectField given a set of objects.  The received params are:

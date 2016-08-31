@@ -1,14 +1,10 @@
 import logging
-import os
 
-from galaxy.util import listify
 from galaxy.web.form_builder import SelectField
-
-from tool_shed.util import hg_util
-from tool_shed.util import metadata_util
-from tool_shed.util import shed_util_common as suc
+from tool_shed.util import hg_util, metadata_util
 
 log = logging.getLogger( __name__ )
+
 
 def build_approved_select_field( trans, name, selected_value=None, for_component=True ):
     options = [ ( 'No', trans.model.ComponentReview.approved_states.NO ),
@@ -22,6 +18,7 @@ def build_approved_select_field( trans, name, selected_value=None, for_component
         selected = selected_value and option_tup[ 1 ] == selected_value
         select_field.add_option( option_tup[ 0 ], option_tup[ 1 ], selected=selected )
     return select_field
+
 
 def build_changeset_revision_select_field( trans, repository, selected_value=None, add_id_to_name=True,
                                            downloadable=False, reviewed=False, not_reviewed=False ):
@@ -82,20 +79,6 @@ def build_changeset_revision_select_field( trans, repository, selected_value=Non
         select_field.add_option( option_tup[ 0 ], option_tup[ 1 ], selected=selected )
     return select_field
 
-def filter_by_latest_downloadable_changeset_revision_that_has_failing_tool_tests( trans, repository ):
-    """
-    Inspect the latest downloadable changeset revision for the received repository to see if it
-    includes at least 1 tool that has at least 1 failing test.  This will filter out repositories
-    of type repository_suite_definition and tool_dependency_definition.
-    """
-    repository_metadata = get_latest_downloadable_repository_metadata_if_it_includes_tools( trans, repository )
-    if repository_metadata is not None \
-        and has_been_tested( repository_metadata ) \
-        and not repository_metadata.missing_test_components \
-        and not repository_metadata.tools_functionally_correct \
-        and not repository_metadata.test_install_error:
-        return repository_metadata.changeset_revision
-    return None
 
 def filter_by_latest_downloadable_changeset_revision_that_has_missing_tool_test_components( trans, repository ):
     """
@@ -107,24 +90,10 @@ def filter_by_latest_downloadable_changeset_revision_that_has_missing_tool_test_
     """
     repository_metadata = get_latest_downloadable_repository_metadata_if_it_includes_tools( trans, repository )
     if repository_metadata is not None \
-        and has_been_tested( repository_metadata ) \
-        and repository_metadata.missing_test_components:
+            and repository_metadata.missing_test_components:
         return repository_metadata.changeset_revision
     return None
 
-def filter_by_latest_downloadable_changeset_revision_that_has_no_failing_tool_tests( trans, repository ):
-    """
-    Inspect the latest downloadable changeset revision for the received repository to see if it
-    includes tools with no failing tests.  This will filter out repositories of type repository_suite_definition
-    and tool_dependency_definition.
-    """
-    repository_metadata = get_latest_downloadable_repository_metadata_if_it_includes_tools( trans, repository )
-    if repository_metadata is not None \
-        and has_been_tested( repository_metadata ) \
-        and not repository_metadata.missing_test_components \
-        and repository_metadata.tools_functionally_correct:
-        return repository_metadata.changeset_revision
-    return None
 
 def filter_by_latest_metadata_changeset_revision_that_has_invalid_tools( trans, repository ):
     """
@@ -137,31 +106,6 @@ def filter_by_latest_metadata_changeset_revision_that_has_invalid_tools( trans, 
         return repository_metadata.changeset_revision
     return None
 
-def filter_by_latest_downloadable_changeset_revision_that_has_test_install_errors( trans, repository ):
-    """
-    Inspect the latest downloadable changeset revision for the received repository to see if
-    it has tool test installation errors.  This will return repositories of type unrestricted
-    as well as types repository_suite_definition and tool_dependency_definition.
-    """
-    repository_metadata = get_latest_downloadable_repository_metadata_if_it_has_test_install_errors( trans, repository )
-    # Filter further by eliminating repositories that are missing test components.
-    if repository_metadata is not None \
-        and has_been_tested( repository_metadata ) \
-        and not repository_metadata.missing_test_components:
-        return repository_metadata.changeset_revision
-    return None
-
-def filter_by_latest_downloadable_changeset_revision_with_skip_tests_checked( trans, repository ):
-    """
-    Inspect the latest downloadable changeset revision for the received repository to see if skip tests
-    is checked.  This will return repositories of type unrestricted as well as types repository_suite_definition
-    and tool_dependency_definition.
-    """
-    repository_metadata = get_latest_downloadable_repository_metadata( trans, repository )
-    # The skip_tool_tests attribute is a SkipToolTest table mapping backref to the RepositoryMetadata table.
-    if repository_metadata is not None and repository_metadata.skip_tool_tests:
-        return repository_metadata.changeset_revision
-    return None
 
 def get_latest_downloadable_repository_metadata( trans, repository ):
     """
@@ -174,7 +118,7 @@ def get_latest_downloadable_repository_metadata( trans, repository ):
     tip_ctx = str( repo.changectx( repo.changelog.tip() ) )
     repository_metadata = None
     try:
-        repository_metadata = suc.get_repository_metadata_by_changeset_revision( trans.app, encoded_repository_id, tip_ctx )
+        repository_metadata = metadata_util.get_repository_metadata_by_changeset_revision( trans.app, encoded_repository_id, tip_ctx )
         if repository_metadata is not None and repository_metadata.downloadable:
             return repository_metadata
         return None
@@ -185,12 +129,13 @@ def get_latest_downloadable_repository_metadata( trans, repository ):
                                                                                                downloadable=True )
         if latest_downloadable_revision == hg_util.INITIAL_CHANGELOG_HASH:
             return None
-        repository_metadata = suc.get_repository_metadata_by_changeset_revision( trans.app,
-                                                                                 encoded_repository_id,
-                                                                                 latest_downloadable_revision )
+        repository_metadata = metadata_util.get_repository_metadata_by_changeset_revision( trans.app,
+                                                                                           encoded_repository_id,
+                                                                                           latest_downloadable_revision )
         if repository_metadata is not None and repository_metadata.downloadable:
             return repository_metadata
         return None
+
 
 def get_latest_downloadable_repository_metadata_if_it_includes_tools( trans, repository ):
     """
@@ -203,18 +148,6 @@ def get_latest_downloadable_repository_metadata_if_it_includes_tools( trans, rep
         return repository_metadata
     return None
 
-def get_latest_downloadable_repository_metadata_if_it_has_test_install_errors( trans, repository ):
-    """
-    Return the latest downloadable repository_metadata record for the received repository if its
-    test_install_error attribute is True.  This will return repositories of type unrestricted as
-    well as types repository_suite_definition and tool_dependency_definition.
-    """
-    repository_metadata = get_latest_downloadable_repository_metadata( trans, repository )
-    if repository_metadata is not None \
-        and has_been_tested( repository_metadata ) \
-        and repository_metadata.test_install_error:
-        return repository_metadata
-    return None
 
 def get_latest_repository_metadata( trans, repository ):
     """
@@ -226,7 +159,7 @@ def get_latest_repository_metadata( trans, repository ):
     repo = hg_util.get_repo_for_repository( trans.app, repository=repository, repo_path=None, create=False )
     tip_ctx = str( repo.changectx( repo.changelog.tip() ) )
     try:
-        repository_metadata = suc.get_repository_metadata_by_changeset_revision( trans.app, encoded_repository_id, tip_ctx )
+        repository_metadata = metadata_util.get_repository_metadata_by_changeset_revision( trans.app, encoded_repository_id, tip_ctx )
         return repository_metadata
     except:
         latest_downloadable_revision = metadata_util.get_previous_metadata_changeset_revision( repository,
@@ -235,10 +168,11 @@ def get_latest_repository_metadata( trans, repository ):
                                                                                                downloadable=False )
         if latest_downloadable_revision == hg_util.INITIAL_CHANGELOG_HASH:
             return None
-        repository_metadata = suc.get_repository_metadata_by_changeset_revision( trans.app,
-                                                                                 encoded_repository_id,
-                                                                                 latest_downloadable_revision )
+        repository_metadata = metadata_util.get_repository_metadata_by_changeset_revision( trans.app,
+                                                                                           encoded_repository_id,
+                                                                                           latest_downloadable_revision )
         return repository_metadata
+
 
 def get_latest_repository_metadata_if_it_includes_invalid_tools( trans, repository ):
     """
@@ -252,25 +186,3 @@ def get_latest_repository_metadata_if_it_includes_invalid_tools( trans, reposito
         if metadata is not None and 'invalid_tools' in metadata:
             return repository_metadata
     return None
-
-def has_been_tested( repository_metadata ):
-    """
-    Return True if the received repository_metadata record'd tool_test_results column was populated by
-    the Tool Shed's install and test framework. 
-    """
-    tool_test_results = repository_metadata.tool_test_results
-    if tool_test_results is None:
-        return False
-    # The install and test framework's preparation scripts will populate the tool_test_results column
-    # with something like this:
-    # [{"test_environment": 
-    #    {"time_tested": "2014-05-15 16:15:18",
-    #     "tool_shed_database_version": 22, 
-    #     "tool_shed_mercurial_version": "2.2.3", 
-    #     "tool_shed_revision": "13459:9a1415f8108f"}
-    # }]
-    tool_test_results = listify( tool_test_results )
-    for test_results_dict in tool_test_results:
-        if len( test_results_dict ) > 1:
-            return True
-    return False

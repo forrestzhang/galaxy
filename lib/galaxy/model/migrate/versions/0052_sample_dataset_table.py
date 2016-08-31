@@ -2,40 +2,38 @@
 Migration script to add the sample_dataset table and remove the 'dataset_files' column
 from the 'sample' table
 """
-
-from sqlalchemy import *
-from sqlalchemy.orm import *
-from migrate import *
-from migrate.changeset import *
-from sqlalchemy.exc import *
-
-from galaxy.model.custom_types import *
-from galaxy.util.json import loads, dumps
+from __future__ import print_function
 
 import datetime
-now = datetime.datetime.utcnow
-
 import logging
-log = logging.getLogger( __name__ )
+from json import loads
 
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, MetaData, Table, TEXT
+from sqlalchemy.exc import NoSuchTableError
+
+from galaxy.model.custom_types import TrimmedString
+
+now = datetime.datetime.utcnow
+log = logging.getLogger( __name__ )
 metadata = MetaData()
 
 
-def nextval( table, col='id' ):
-    if migrate_engine.name == 'postgres':
+def nextval( migrate_engine, table, col='id' ):
+    if migrate_engine.name in ['postgres', 'postgresql']:
         return "nextval('%s_%s_seq')" % ( table, col )
-    elif migrate_engine.name == 'mysql' or migrate_engine.name == 'sqlite':
+    elif migrate_engine.name in ['mysql', 'sqlite']:
         return "null"
     else:
         raise Exception( 'Unable to convert data for unknown database type: %s' % migrate_engine.name )
 
-def localtimestamp():
-   if migrate_engine.name == 'postgres' or migrate_engine.name == 'mysql':
-       return "LOCALTIMESTAMP"
-   elif migrate_engine.name == 'sqlite':
-       return "current_date || ' ' || current_time"
-   else:
-       raise Exception( 'Unable to convert data for unknown database type: %s' % db )
+
+def localtimestamp(migrate_engine):
+    if migrate_engine.name in ['mysql', 'postgres', 'postgresql']:
+        return "LOCALTIMESTAMP"
+    elif migrate_engine.name == 'sqlite':
+        return "current_date || ' ' || current_time"
+    else:
+        raise Exception( 'Unable to convert data for unknown database type: %s' % migrate_engine.name )
 
 SampleDataset_table = Table('sample_dataset', metadata,
                             Column( "id", Integer, primary_key=True ),
@@ -48,13 +46,14 @@ SampleDataset_table = Table('sample_dataset', metadata,
                             Column( "error_msg", TEXT ),
                             Column( "size", TrimmedString( 255 ) ) )
 
+
 def upgrade(migrate_engine):
     metadata.bind = migrate_engine
-    print __doc__
+    print(__doc__)
     metadata.reflect()
     try:
         SampleDataset_table.create()
-    except Exception, e:
+    except Exception as e:
         log.debug( "Creating sample_dataset table failed: %s" % str( e ) )
 
     cmd = "SELECT id, dataset_files FROM sample"
@@ -64,11 +63,11 @@ def upgrade(migrate_engine):
         if r[1]:
             dataset_files = loads(r[1])
             for df in dataset_files:
-                if type(df) == type(dict()):
+                if isinstance(df, dict):
                     cmd = "INSERT INTO sample_dataset VALUES (%s, %s, %s, %s, '%s', '%s', '%s', '%s', '%s')"
-                    cmd = cmd % ( nextval('sample_dataset'),
-                                  localtimestamp(),
-                                  localtimestamp(),
+                    cmd = cmd % ( nextval(migrate_engine, 'sample_dataset'),
+                                  localtimestamp(migrate_engine),
+                                  localtimestamp(migrate_engine),
                                   str(sample_id),
                                   df.get('name', ''),
                                   df.get('filepath', ''),
@@ -86,7 +85,7 @@ def upgrade(migrate_engine):
     if Sample_table is not None:
         try:
             Sample_table.c.dataset_files.drop()
-        except Exception, e:
+        except Exception as e:
             log.debug( "Deleting column 'dataset_files' from the 'sample' table failed: %s" % ( str( e ) ) )
 
 

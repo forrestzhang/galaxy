@@ -1,12 +1,10 @@
 """Tool Shed Security"""
-import ConfigParser
 import logging
-import os
-from datetime import datetime
-from datetime import timedelta
-from galaxy.util.bunch import Bunch
+
+from sqlalchemy import and_, false
+
 from galaxy.util import listify
-from galaxy.model.orm import and_
+from galaxy.util.bunch import Bunch
 
 log = logging.getLogger(__name__)
 
@@ -24,10 +22,10 @@ class RBACAgent:
     permitted_actions = Bunch()
 
     def associate_components( self, **kwd ):
-        raise 'No valid method of associating provided components: %s' % kwd
+        raise Exception( 'No valid method of associating provided components: %s' % kwd )
 
     def associate_user_role( self, user, role ):
-        raise 'No valid method of associating a user with a role'
+        raise Exception( 'No valid method of associating a user with a role' )
 
     def convert_permitted_action_strings( self, permitted_action_strings ):
         """
@@ -37,7 +35,7 @@ class RBACAgent:
         return filter( lambda x: x is not None, [ self.permitted_actions.get( action_string ) for action_string in permitted_action_strings ] )
 
     def create_private_user_role( self, user ):
-        raise "Unimplemented Method"
+        raise Exception( "Unimplemented Method" )
 
     def get_action( self, name, default=None ):
         """Get a permitted action by its dict key or action name"""
@@ -51,10 +49,10 @@ class RBACAgent:
         return self.permitted_actions.__dict__.values()
 
     def get_item_actions( self, action, item ):
-        raise 'No valid method of retrieving action (%s) for item %s.' % ( action, item )
+        raise Exception( 'No valid method of retrieving action (%s) for item %s.' % ( action, item ) )
 
     def get_private_user_role( self, user ):
-        raise "Unimplemented Method"
+        raise Exception( "Unimplemented Method" )
 
 
 class CommunityRBACAgent( RBACAgent ):
@@ -95,7 +93,7 @@ class CommunityRBACAgent( RBACAgent ):
                 return self.associate_group_role( kwd['group'], kwd['role'] )
         elif 'repository' in kwd:
             return self.associate_repository_category( kwd[ 'repository' ], kwd[ 'category' ] )
-        raise 'No valid method of associating provided components: %s' % kwd
+        raise Exception( 'No valid method of associating provided components: %s' % kwd )
 
     def associate_group_role( self, group, role ):
         assoc = self.model.GroupRoleAssociation( group, role )
@@ -243,12 +241,12 @@ class CommunityRBACAgent( RBACAgent ):
         # A member of the IUC is authorized to create new repositories that are owned by another user.
         iuc_group = self.sa_session.query( self.model.Group ) \
                                    .filter( and_( self.model.Group.table.c.name == 'Intergalactic Utilities Commission',
-                                                  self.model.Group.table.c.deleted == False ) ) \
+                                                  self.model.Group.table.c.deleted == false() ) ) \
                                    .first()
         if iuc_group is not None:
             for uga in iuc_group.users:
-               if uga.user.id == user.id:
-                   return True
+                if uga.user.id == user.id:
+                    return True
         return False
 
     def user_can_review_repositories( self, user ):
@@ -270,6 +268,7 @@ class CommunityRBACAgent( RBACAgent ):
                     # Reviewers can access private/public component reviews.
                     return True
         return False
+
 
 def get_permitted_actions( filter=None ):
     '''Utility method to return a subset of RBACAgent's permitted actions'''

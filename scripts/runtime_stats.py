@@ -31,9 +31,9 @@ Examples
 """
 from __future__ import print_function
 
+import argparse
 import re
 import sys
-import argparse
 
 try:
     import configparser
@@ -118,7 +118,7 @@ def parse_arguments():
         cp = configparser.ConfigParser()
         cp.readfp(open(args.config))
         uri = cp.get('app:main', 'database_connection')
-        names = { 'database' : 'dbname', 'username' : 'user' }
+        names = { 'database': 'dbname', 'username': 'user' }
         args.connect_args = url.make_url(uri).translate_connect_args(**names)
     else:
         args.connect_args = {}
@@ -129,6 +129,7 @@ def parse_arguments():
             print('%s: %s' % i)
 
     return args
+
 
 def query(tool_id=None, user=None, like=None, source='metrics',
           connect_args=None, debug=False, min=-1, max=-1, **kwargs):
@@ -248,8 +249,9 @@ def query(tool_id=None, user=None, like=None, source='metrics',
             msg += ' (=%0.2f hours)' % hours
         print(msg)
 
+
 def nice_times(seconds):
-    if seconds < 60*60:
+    if seconds < 60 * 60:
         hours = None
         if seconds < 60:
             minutes = None
@@ -259,6 +261,7 @@ def nice_times(seconds):
         minutes = seconds / 60
         hours = seconds / 60 / 60
     return hours, minutes
+
 
 def main():
     args = parse_arguments()
